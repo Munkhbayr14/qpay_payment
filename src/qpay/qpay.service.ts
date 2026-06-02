@@ -66,26 +66,30 @@ export class QpayService {
   // ─── 2. Invoice үүсгэх ────────────────────────────────────────────────────
 
   async createInvoice(
-    orderId: string,
-    amount: number,
+    orderId: any, // ЗАСВАР: Төрлийг уян хатан болгов
+    amount: any,  // ЗАСВАР: Төрлийг уян хатан болгов
     callbackUrl: string,
   ): Promise<QpayInvoiceResponse> {
     const token = await this.getAccessToken();
 
     const invoiceCode = this.configService.get<string>('QPAY_INVOICE_CODE') || 'ORDER_INVOICE';
 
+    // ЗАСВАР: Shopify-оос ирж буй утгуудыг QPay API-д яг таг тааруулж хөрвүүлнэ
+    const cleanOrderId = String(orderId).trim(); // Текст рүү хөрвүүлж хоосон зайг арилгана
+    const cleanAmount = Math.round(Number(amount)); // Тоо рүү хөрвүүлээд бутархайг нь бүхэлтгэнэ (QPay бутархай дүнд дургүй)
+
     const body: CreateInvoiceDto = {
       invoice_code: invoiceCode,
-      sender_invoice_no: orderId,
+      sender_invoice_no: cleanOrderId, // Цэвэрлэгдсэн ID
       invoice_receiver_code: 'terminal',
-      invoice_description: `Order #${orderId} - ${amount}₮`,
+      invoice_description: `Order #${cleanOrderId} - ${cleanAmount}₮`,
       sender_branch_code: 'ONLINE',
-      amount,
+      amount: cleanAmount, // Заавал тоо (Number) очих ёстой
       callback_url: callbackUrl,
     };
 
     try {
-      this.logger.log(`Invoice үүсгэж байна: order=${orderId}, amount=${amount}`);
+      this.logger.log(`Invoice үүсгэж байна: order=${cleanOrderId}, amount=${cleanAmount}`);
 
       const { data } = await firstValueFrom(
         this.httpService.post<QpayInvoiceResponse>(
@@ -105,7 +109,7 @@ export class QpayService {
     } catch (error) {
       const err = error as any;
       this.logger.error(
-        `Invoice үүсгэхэд алдаа: order=${orderId}`,
+        `Invoice үүсгэхэд алдаа: order=${cleanOrderId}`,
         err?.response?.data ?? err?.message,
       );
       throw new InternalServerErrorException('QPay invoice үүсгэхэд алдаа гарлаа');

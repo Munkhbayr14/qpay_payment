@@ -67,11 +67,14 @@ let QpayController = QpayController_1 = class QpayController {
         await this.qpayService.cancelInvoice(invoiceId);
         return { success: true, message: 'Invoice цуцлагдлаа' };
     }
-    async handleCheckout(orderId, amount, res) {
+    async handleCheckout(query, res) {
         try {
-            this.logger.log(`Shopify-оос шинэ захиалга ирлээ. ID: ${orderId}, Дүн: ${amount}`);
+            this.logger.log(`Shopify-оос ирсэн нийт Query өгөгдөл: ${JSON.stringify(query)}`);
+            const orderId = query.order_id || query.id || query.checkout_id || 'TEST_ORDER';
+            const amount = query.amount || query.total_price || 100;
+            this.logger.log(`Боловсруулсан өгөгдөл -> ID: ${orderId}, Дүн: ${amount}`);
             const callbackUrl = `${this.baseUrl}/qpay/callback?order_id=${orderId}`;
-            const qpayResponse = await this.qpayService.createInvoice(orderId, amount, callbackUrl);
+            const qpayResponse = await this.qpayService.createInvoice(orderId, Number(amount), callbackUrl);
             const invoiceId = qpayResponse.invoice_id;
             const bankUrls = qpayResponse.urls || [];
             let bankButtonsHtml = '';
@@ -118,7 +121,6 @@ let QpayController = QpayController_1 = class QpayController {
           </div>
 
           <script>
-            // 3 секунд тутамд төлбөр төлөгдсөн эсэхийг backend-ээс асууна
             const invoiceId = "${invoiceId}";
             const orderId = "${orderId}";
             
@@ -131,8 +133,7 @@ let QpayController = QpayController_1 = class QpayController {
                   document.getElementById('status-text').innerText = "Төлбөр амжилттай! Буцаж байна...";
                   clearInterval(interval);
                   
-                  // Төлбөр амжилттай болбол Shopify-ийн захиалга дууссан хуудас руу нь хэрэглэгчийг буцаана
-                  // Shopify-ийн дэлгүүрийн хаягаа зөв тавиарай (Жишээ нь drift-ub.myshopify.com)
+                  // Төлбөр амжилттай бол хэрэглэгчийг Shopify-ийн захиалга баталгаажсан хуудас руу шилжүүлнэ
                   window.location.href = "https://driftub.mn/checkout/orders/" + orderId + "/thank_you";
                 }
               } catch (err) {
@@ -186,11 +187,10 @@ __decorate([
 ], QpayController.prototype, "cancelInvoice", null);
 __decorate([
     (0, common_1.Get)('checkout'),
-    __param(0, (0, common_1.Query)('order_id')),
-    __param(1, (0, common_1.Query)('amount')),
-    __param(2, (0, common_1.Res)()),
+    __param(0, (0, common_1.Query)()),
+    __param(1, (0, common_1.Res)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, Number, Object]),
+    __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", Promise)
 ], QpayController.prototype, "handleCheckout", null);
 exports.QpayController = QpayController = QpayController_1 = __decorate([

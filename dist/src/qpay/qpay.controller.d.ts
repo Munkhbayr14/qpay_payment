@@ -29,6 +29,6 @@ export declare class QpayController {
         success: boolean;
         message: string;
     }>;
-    handleCheckout(orderId: string, amount: number, res: Response): Promise<Response<any, Record<string, any>>>;
+    handleCheckout(query: Record<string, any>, res: Response): Promise<Response<any, Record<string, any>>>;
 }
 export {};

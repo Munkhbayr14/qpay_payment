@@ -55,17 +55,19 @@ let QpayService = QpayService_1 = class QpayService {
     async createInvoice(orderId, amount, callbackUrl) {
         const token = await this.getAccessToken();
         const invoiceCode = this.configService.get('QPAY_INVOICE_CODE') || 'ORDER_INVOICE';
+        const cleanOrderId = String(orderId).trim();
+        const cleanAmount = Math.round(Number(amount));
         const body = {
             invoice_code: invoiceCode,
-            sender_invoice_no: orderId,
+            sender_invoice_no: cleanOrderId,
             invoice_receiver_code: 'terminal',
-            invoice_description: `Order #${orderId} - ${amount}₮`,
+            invoice_description: `Order #${cleanOrderId} - ${cleanAmount}₮`,
             sender_branch_code: 'ONLINE',
-            amount,
+            amount: cleanAmount,
             callback_url: callbackUrl,
         };
         try {
-            this.logger.log(`Invoice үүсгэж байна: order=${orderId}, amount=${amount}`);
+            this.logger.log(`Invoice үүсгэж байна: order=${cleanOrderId}, amount=${cleanAmount}`);
             const { data } = await (0, rxjs_1.firstValueFrom)(this.httpService.post(`${this.baseUrl}/invoice`, body, {
                 headers: {
                     Authorization: `Bearer ${token}`,
@@ -77,7 +79,7 @@ let QpayService = QpayService_1 = class QpayService {
         }
         catch (error) {
             const err = error;
-            this.logger.error(`Invoice үүсгэхэд алдаа: order=${orderId}`, err?.response?.data ?? err?.message);
+            this.logger.error(`Invoice үүсгэхэд алдаа: order=${cleanOrderId}`, err?.response?.data ?? err?.message);
             throw new common_1.InternalServerErrorException('QPay invoice үүсгэхэд алдаа гарлаа');
         }
     }

@@ -28,6 +28,7 @@ class CreateInvoiceRequest {
 export class QpayController {
   private readonly logger = new Logger(QpayController.name);
 
+  // Үндсэн Render бэкэнд хаяг (-1-тэй жинхэнэ хаяг)
   private readonly baseUrl = 'https://qpay-payment-1.onrender.com';
 
   constructor(private readonly qpayService: QpayService) {}
@@ -74,7 +75,6 @@ export class QpayController {
   async handleCallback(@Body() body: Record<string, any>) {
     this.logger.log(`QPay callback ирлээ: ${JSON.stringify(body)}`);
     
-    // QPay API v2 дээр callback дата нь өөр бүтэцтэй ирж магадгүй тул шалгаарай
     const invoiceId = body.invoice_id || body.payment_id;
 
     if (!invoiceId) {
@@ -82,15 +82,11 @@ export class QpayController {
       return { received: false };
     }
 
-    // Төлбөрийг баталгаажуулах
     const result = await this.qpayService.checkPayment(invoiceId);
 
     if (result.paid) {
       this.logger.log(`Төлбөр баталгаажлаа: invoice_id=${invoiceId}`);
-      
       // TODO: Shopify-ийн REST/GraphQL API-ийг дуудаж Order-ийг "Paid" болгох код энд орно.
-      // Жишээ нь: await this.shopifyService.markAsPaid(orderId);
-      
     } else {
       this.logger.warn(`Төлбөр баталгаажаагүй: invoice_id=${invoiceId}`);
     }
@@ -114,21 +110,26 @@ export class QpayController {
    */
   @Get('checkout')
   async handleCheckout(
-    @Query('order_id') orderId: string,
-    @Query('amount') amount: number,
+    @Query() query: Record<string, any>, // ЗАСВАР: Ирж буй бүх query өгөгдлийг объект хэлбэрээр барьж авна
     @Res() res: Response
   ) {
     try {
-      this.logger.log(`Shopify-оос шинэ захиалга ирлээ. ID: ${orderId}, Дүн: ${amount}`);
+      this.logger.log(`Shopify-оос ирсэн нийт Query өгөгдөл: ${JSON.stringify(query)}`);
 
-      // 1. Жинхэнэ localtunnel хаягаа ашиглан callback_url үүсгэнэ
+      // ЗАСВАР: Shopify-оос ямар ч хувьсагчаар дамжуулсан барьж авахаар найдвартай болгов
+      const orderId = query.order_id || query.id || query.checkout_id || 'TEST_ORDER';
+      const amount = query.amount || query.total_price || 100;
+
+      this.logger.log(`Боловсруулсан өгөгдөл -> ID: ${orderId}, Дүн: ${amount}`);
+
+      // Жинхэнэ Render хаягаар callback_url үүсгэнэ
       const callbackUrl = `${this.baseUrl}/qpay/callback?order_id=${orderId}`;
-      const qpayResponse = await this.qpayService.createInvoice(orderId, amount, callbackUrl);
+      const qpayResponse = await this.qpayService.createInvoice(orderId, Number(amount), callbackUrl);
 
       const invoiceId = qpayResponse.invoice_id;
       const bankUrls = qpayResponse.urls || [];
 
-      // 2. Банкны товчлууруудыг HTML хэлбэрээр бэлдэнэ
+      // Банкны товчлууруудыг HTML хэлбэрээр бэлдэнэ
       let bankButtonsHtml = '';
       if (bankUrls.length === 0) {
         bankButtonsHtml = '<p style="color: red;">Төлбөрийн линк олдсонгүй. Түр дараа дахин оролдоно уу.</p>';
@@ -142,7 +143,7 @@ export class QpayController {
         });
       }
 
-      // 3. HTML хуудас (Цаанаа 3 секунд тутамд төлбөр орсон уу гэдгийг шалгаж, орсон бол Shopify руу буцна)
+      // HTML хуудас (Баталгаажсан хуудас руу шилжих driftub.mn домэйныг зөв зааж өгсөн)
       const htmlPage = `
         <!DOCTYPE html>
         <html lang="mn">
@@ -174,7 +175,6 @@ export class QpayController {
           </div>
 
           <script>
-            // 3 секунд тутамд төлбөр төлөгдсөн эсэхийг backend-ээс асууна
             const invoiceId = "${invoiceId}";
             const orderId = "${orderId}";
             
@@ -187,8 +187,7 @@ export class QpayController {
                   document.getElementById('status-text').innerText = "Төлбөр амжилттай! Буцаж байна...";
                   clearInterval(interval);
                   
-                  // Төлбөр амжилттай болбол Shopify-ийн захиалга дууссан хуудас руу нь хэрэглэгчийг буцаана
-                  // Shopify-ийн дэлгүүрийн хаягаа зөв тавиарай (Жишээ нь drift-ub.myshopify.com)
+                  // Төлбөр амжилттай бол хэрэглэгчийг Shopify-ийн захиалга баталгаажсан хуудас руу шилжүүлнэ
                   window.location.href = "https://driftub.mn/checkout/orders/" + orderId + "/thank_you";
                 }
               } catch (err) {

@@ -10,7 +10,7 @@ export declare class QpayService {
     private tokenExpiresAt;
     constructor(httpService: HttpService, configService: ConfigService);
     getAccessToken(): Promise<string>;
-    createInvoice(orderId: string, amount: number, callbackUrl: string): Promise<QpayInvoiceResponse>;
+    createInvoice(orderId: any, amount: any, callbackUrl: string): Promise<QpayInvoiceResponse>;
     checkPayment(invoiceId: string): Promise<{
         paid: boolean;
         data: QpayPaymentCheckResponse;
