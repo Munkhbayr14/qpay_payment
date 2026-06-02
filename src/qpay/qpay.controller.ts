@@ -28,7 +28,7 @@ class CreateInvoiceRequest {
 export class QpayController {
   private readonly logger = new Logger(QpayController.name);
 
-  private readonly baseUrl = 'https://qpay-payment.onrender.com';
+  private readonly baseUrl = 'https://qpay-payment-1.onrender.com';
 
   constructor(private readonly qpayService: QpayService) {}
 

@@ -24,7 +24,7 @@ class CreateInvoiceRequest {
 let QpayController = QpayController_1 = class QpayController {
     qpayService;
     logger = new common_1.Logger(QpayController_1.name);
-    baseUrl = 'https://qpay-payment.onrender.com';
+    baseUrl = 'https://qpay-payment-1.onrender.com';
     constructor(qpayService) {
         this.qpayService = qpayService;
     }
