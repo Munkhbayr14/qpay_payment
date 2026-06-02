@@ -28,8 +28,7 @@ class CreateInvoiceRequest {
 export class QpayController {
   private readonly logger = new Logger(QpayController.name);
 
-  // ЧИНИЙ АНХААРАХ ХЭСЭГ: Саяны гарч ирсэн localtunnel хаягаа энд ганцхан газар тодорхойлчихно
-  private readonly baseUrl = 'https://tame-pigs-learn.loca.lt';
+  private readonly baseUrl = 'https://qpay-payment.onrender.com';
 
   constructor(private readonly qpayService: QpayService) {}
 
