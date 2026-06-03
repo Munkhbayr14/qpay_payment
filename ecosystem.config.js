@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'qpay_payment_backend',
       cwd: '/home/ec2-user/qpay_payment',
-      script: 'dist/main.js',
+      script: 'dist/src/main.js',
       instances: 1,
       exec_mode: 'fork',
       autorestart: true,
