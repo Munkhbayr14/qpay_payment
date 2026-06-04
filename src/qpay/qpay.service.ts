@@ -12,7 +12,7 @@ import {
 @Injectable()
 export class QpayService {
   private readonly logger = new Logger(QpayService.name);
-  private readonly baseUrl = 'https://merchant.qpay.mn/v2';
+  private readonly payUrl = process.env.PAY_URL;
 
   // Token cache — production дээр Redis ашиглахыг зөвлөнө
   private accessToken: string | null = null;
@@ -40,7 +40,7 @@ export class QpayService {
 
       const { data } = await firstValueFrom(
         this.httpService.post<QpayTokenResponse>(
-          `${this.baseUrl}/auth/token`,
+          `${this.payUrl}/auth/token`,
           {},
           {
             headers: {
@@ -93,7 +93,7 @@ export class QpayService {
 
       const { data } = await firstValueFrom(
         this.httpService.post<QpayInvoiceResponse>(
-          `${this.baseUrl}/invoice`,
+          `${this.payUrl}/invoice`,
           body,
           {
             headers: {
@@ -126,7 +126,7 @@ export class QpayService {
 
       const { data } = await firstValueFrom(
         this.httpService.post<QpayPaymentCheckResponse>(
-          `${this.baseUrl}/payment/check`,
+          `${this.payUrl}/payment/check`,
           {
             object_type: 'INVOICE',
             object_id: invoiceId,
@@ -162,7 +162,7 @@ export class QpayService {
 
     try {
       await firstValueFrom(
-        this.httpService.delete(`${this.baseUrl}/invoice/${invoiceId}`, {
+        this.httpService.delete(`${this.payUrl}/invoice/${invoiceId}`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
       );
