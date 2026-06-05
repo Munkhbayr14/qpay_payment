@@ -268,21 +268,34 @@ export class QpayService {
     }
   }
 
-  async registerCallback(body: Record<string, any>): Promise<void> {
+async registerCallback(body: Record<string, any>): Promise<void> {
     const invoiceId = body.invoice_id || body.payment_id;
     const result = await this.checkPayment(invoiceId);
     const existing = await this.paymentRepo.findOne({ invoiceId });
 
+    // 1. ШАЛГАЛТ: Хэрэв existing олдоогүй бол цааш үргэлжлүүлэхгүй
+    if (!existing) {
+      this.logger.error(`Callback ирсэн боловч датабаазаас бичлэг олдсонгүй: ${invoiceId}`);
+      return;
+    }
+
+    // 2. Хэрэв төлбөр төлөгдсөн бөгөөд өмнө нь захиалга үүсгээгүй бол (status !== 'PAID')
+    // Одоо existing нь null биш гэдгийг TypeScript баттай мэдэж байна
+    if (result.paid && existing.status !== 'PAID') {
+      await this.createShopifyOrder(existing);
+    }
+
+    // 3. Үргэлжлүүлэн өгөгдлөө шинэчлэх
     const payment = await this.upsertPayment({
-      orderId: existing?.orderId,
+      orderId: existing.orderId,
       invoiceId,
-      amount: existing?.amount,
-      qpayShortUrl: existing?.qpayShortUrl,
+      amount: existing.amount,
+      qpayShortUrl: existing.qpayShortUrl,
       paymentId: body.qpay_payment_id ?? body.payment_id ?? invoiceId,
       status: result.paid ? 'PAID' : 'UNPAID',
       paid: result.paid,
       paidAmount: result.data.paid_amount,
-      paidAt: result.paid ? new Date() : existing?.paidAt,
+      paidAt: result.paid ? new Date() : existing.paidAt,
       callbackReceivedAt: new Date(),
     });
 
@@ -319,6 +332,60 @@ export class QpayService {
       const err = error as any;
       this.logger.error(`Invoice цуцлахад алдаа: ${invoiceId}`, err?.response?.data ?? err?.message);
       throw new InternalServerErrorException('Invoice цуцлахад алдаа гарлаа');
+    }
+  }
+async createShopifyOrder(payment: QpayPayment) {
+    const storeDomain = this.configService.get<string>('SHOPIFY_STORE_DOMAIN');
+    const accessToken = this.configService.get<string>('SHOPIFY_ACCESS_TOKEN');
+
+    // Хэрэв тохиргоо байхгүй бол шууд алдаа шидэх (Аюулгүй байдал)
+    if (!storeDomain || !accessToken) {
+      this.logger.error('Shopify тохиргоо дутуу байна: Domain эсвэл Access Token олдсонгүй');
+      throw new InternalServerErrorException('Shopify тохиргооны алдаа');
+    }
+    
+    const url = `https://${storeDomain}/admin/api/2026-04/orders.json`;
+
+    const orderPayload = {
+      order: {
+        note: `QPay-ээр төлөгдсөн. Сагсны ID: ${payment.orderId}`,
+        financial_status: "paid",
+        line_items: [
+          {
+            title: "QPay Төлбөр",
+            price: payment.amount,
+            quantity: 1
+          }
+        ]
+      }
+    };
+
+    try {
+      this.logger.log(`Shopify руу захиалга илгээж байна...`);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          // Энд accessToken нь дээрх if-ээр шалгагдсан тул string гэдэг нь тодорхой болно
+          'X-Shopify-Access-Token': accessToken, 
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(orderPayload),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        // Shopify-аас ирсэн алдааны мессежийг нарийн харах
+        this.logger.error(`Shopify API Error: ${JSON.stringify(data)}`);
+        throw new Error(JSON.stringify(data));
+      }
+
+      this.logger.log(`Shopify захиалга амжилттай үүслээ: ${data.order.id}`);
+      return data;
+    } catch (error) {
+      this.logger.error('Shopify дээр захиалга үүсгэхэд алдаа гарлаа', error);
+      throw new InternalServerErrorException('Shopify захиалга үүсгэж чадсангүй');
     }
   }
 }

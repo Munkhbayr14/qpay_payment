@@ -108,13 +108,13 @@ export class QpayController {
     try {
       this.logger.log(`Shopify query: ${JSON.stringify(query)}`);
 
-      const orderId = query.order_id || query.id || query.checkout_id || 'TEST_ORDER';
+      const cartToken = query.cart_token || 'TEST_CART_TOKEN';
       const amount = query.amount || query.total_price || 100;
 
-      this.logger.log(`ID: ${orderId}, Дүн: ${amount}`);
+      this.logger.log(`Cart Token: ${cartToken}, Дүн: ${amount}`);
 
-      const callbackUrl = `${this.baseUrl}/qpay/callback?order_id=${orderId}`;
-      const qpayResponse = await this.qpayService.createInvoice(orderId, Number(amount), callbackUrl);
+const callbackUrl = `${this.baseUrl}/qpay/callback?cart_token=${cartToken}`;
+      const qpayResponse = await this.qpayService.createInvoice(cartToken, Number(amount), callbackUrl);
 
       const invoiceId = qpayResponse.invoice_id;
       const qrImage = qpayResponse.qr_image || '';
@@ -386,7 +386,7 @@ export class QpayController {
       </div>
       <div class="header-info">
         <div class="header-title">DRIFT.UB</div>
-        <div class="header-order">Захиалга #${orderId}</div>
+        <div class="header-order">Захиалга #${cartToken}</div>
       </div>
       <div class="header-amount">${Number(amount).toLocaleString('mn-MN')} ₮</div>
     </div>
@@ -443,7 +443,7 @@ export class QpayController {
 
   <script>
     const invoiceId = "${invoiceId}";
-    const orderId = "${orderId}";
+    const cartToken = "${cartToken}";
     const baseUrl = "${this.baseUrl}";
 
     // Mobile tab switch
