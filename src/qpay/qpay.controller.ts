@@ -10,6 +10,7 @@ import {
   Logger,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { QpayService } from './qpay.service';
@@ -38,9 +39,13 @@ export class QpayController {
    */
   @Post('invoice')
   @HttpCode(HttpStatus.CREATED)
-  async createInvoice(@Body() body: CreateInvoiceRequest) {
-    const { orderId, amount, callbackUrl } = body;
-    const invoice = await this.qpayService.createInvoice(orderId, amount, callbackUrl);
+  async createInvoice(@Body() body: CreateInvoiceRequest,@Query('cart_token') cartToken: string,) {
+    const { amount, callbackUrl } = body;
+    if (!cartToken) {
+       throw new BadRequestException('Cart token шаардлагатай!');
+    }
+    const pureToken = cartToken.split('?')[0];
+    const invoice = await this.qpayService.createInvoice(pureToken, amount, callbackUrl);
 
     return {
       success: true,

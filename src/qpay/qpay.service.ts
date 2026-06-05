@@ -154,17 +154,15 @@ export class QpayService {
   // ─── 2. Invoice үүсгэх ────────────────────────────────────────────────────
 
   async createInvoice(
-    orderId: any, // ЗАСВАР: Төрлийг уян хатан болгов
+    orderId: string, // ЗАСВАР: Төрлийг уян хатан болгов
     amount: any,  // ЗАСВАР: Төрлийг уян хатан болгов
     callbackUrl: string,
   ): Promise<QpayInvoiceResponse> {
     const token = await this.getAccessToken();
-
     const invoiceCode = this.configService.get<string>('QPAY_INVOICE_CODE') || 'ORDER_INVOICE';
 
-    // ЗАСВАР: Shopify-оос ирж буй утгуудыг QPay API-д яг таг тааруулж хөрвүүлнэ
-    const cleanOrderId = String(orderId).trim(); // Текст рүү хөрвүүлж хоосон зайг арилгана
-    const cleanAmount = Math.round(Number(amount)); // Тоо рүү хөрвүүлээд бутархайг нь бүхэлтгэнэ (QPay бутархай дүнд дургүй)
+    const cleanOrderId = String(orderId).trim().substring(0, 45); 
+    const cleanAmount = Math.round(Number(amount));
 
     const body: CreateInvoiceDto = {
       invoice_code: invoiceCode,
