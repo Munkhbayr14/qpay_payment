@@ -23,6 +23,13 @@ import { QpayRequestLog } from './qpay/entities/qpay-request-log.entity';
         allowGlobalContext: true,
         debug: process.env.NODE_ENV !== 'production',
         ensureDatabase: true,
+        driverOptions: {
+          connection: {
+            ssl: {
+              rejectUnauthorized: false,
+            },
+          },
+        },
       }),
     }),
     QpayModule,
