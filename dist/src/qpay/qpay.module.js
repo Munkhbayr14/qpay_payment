@@ -9,8 +9,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.QpayModule = void 0;
 const common_1 = require("@nestjs/common");
 const axios_1 = require("@nestjs/axios");
+const nestjs_1 = require("@mikro-orm/nestjs");
 const qpay_service_1 = require("./qpay.service");
 const qpay_controller_1 = require("./qpay.controller");
+const qpay_payment_entity_1 = require("./entities/qpay-payment.entity");
+const qpay_request_log_entity_1 = require("./entities/qpay-request-log.entity");
 let QpayModule = class QpayModule {
 };
 exports.QpayModule = QpayModule;
@@ -21,6 +24,7 @@ exports.QpayModule = QpayModule = __decorate([
                 timeout: 10_000,
                 maxRedirects: 3,
             }),
+            nestjs_1.MikroOrmModule.forFeature([qpay_payment_entity_1.QpayPayment, qpay_request_log_entity_1.QpayRequestLog]),
         ],
         controllers: [qpay_controller_1.QpayController],
         providers: [qpay_service_1.QpayService],

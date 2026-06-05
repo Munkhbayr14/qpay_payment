@@ -1,6 +1,8 @@
 import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@mikro-orm/nestjs';
+import { EntityRepository } from '@mikro-orm/core';
 import { firstValueFrom } from 'rxjs';
 import {
   QpayTokenResponse,
@@ -8,6 +10,8 @@ import {
   QpayPaymentCheckResponse,
   CreateInvoiceDto,
 } from './interface/qpay.interface';
+import { QpayPayment } from './entities/qpay-payment.entity';
+import { QpayRequestLog } from './entities/qpay-request-log.entity';
 
 @Injectable()
 export class QpayService {
@@ -21,7 +25,91 @@ export class QpayService {
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
+    @InjectRepository(QpayPayment)
+    private readonly paymentRepo: EntityRepository<QpayPayment>,
+    @InjectRepository(QpayRequestLog)
+    private readonly logRepo: EntityRepository<QpayRequestLog>,
   ) {}
+
+  private safeJson(value: any): string | undefined {
+    try {
+      return value !== undefined ? JSON.stringify(value) : undefined;
+    } catch {
+      return String(value);
+    }
+  }
+
+  private async upsertPayment(data: {
+    orderId?: string;
+    invoiceId: string;
+    amount?: number;
+    qpayShortUrl?: string;
+    status?: string;
+    paid?: boolean;
+    paidAmount?: number;
+    paymentId?: string;
+    paidAt?: Date;
+    callbackReceivedAt?: Date;
+  }): Promise<QpayPayment> {
+    let payment = await this.paymentRepo.findOne({ invoiceId: data.invoiceId });
+
+    if (!payment) {
+      payment = new QpayPayment();
+      payment.orderId = data.orderId ?? '';
+      payment.invoiceId = data.invoiceId;
+      payment.amount = data.amount ?? 0;
+      payment.createdAt = new Date();
+    }
+
+    if (data.orderId !== undefined && data.orderId !== '') {
+      payment.orderId = data.orderId;
+    }
+    if (data.amount !== undefined) {
+      payment.amount = data.amount;
+    }
+    if (data.qpayShortUrl !== undefined) {
+      payment.qpayShortUrl = data.qpayShortUrl;
+    }
+    if (data.status !== undefined) {
+      payment.status = data.status;
+    }
+    if (data.paid !== undefined) {
+      payment.paid = data.paid;
+    }
+    if (data.paidAmount !== undefined) {
+      payment.paidAmount = data.paidAmount;
+    }
+    if (data.paymentId !== undefined) {
+      payment.paymentId = data.paymentId;
+    }
+    if (data.paidAt !== undefined) {
+      payment.paidAt = data.paidAt;
+    }
+    if (data.callbackReceivedAt !== undefined) {
+      payment.callbackReceivedAt = data.callbackReceivedAt;
+    }
+
+    payment.updatedAt = new Date();
+    await this.paymentRepo.getEntityManager().persistAndFlush(payment);
+    return payment;
+  }
+
+  private async logRequest(
+    payment: QpayPayment,
+    type: string,
+    request: any,
+    response: any,
+    note?: string,
+  ): Promise<QpayRequestLog> {
+    const log = new QpayRequestLog();
+    log.payment = payment;
+    log.type = type;
+    log.requestPayload = this.safeJson(request);
+    log.responsePayload = this.safeJson(response);
+    log.note = note;
+    await this.logRepo.getEntityManager().persistAndFlush(log);
+    return log;
+  }
 
   // ─── 1. Access Token авах ──────────────────────────────────────────────────
 
@@ -105,6 +193,17 @@ export class QpayService {
       );
 
       this.logger.log(`Invoice амжилттай үүслээ: invoice_id=${data.invoice_id}`);
+
+      const payment = await this.upsertPayment({
+        orderId: cleanOrderId,
+        invoiceId: data.invoice_id,
+        amount: cleanAmount,
+        qpayShortUrl: data.qPay_shortUrl,
+        status: 'PENDING',
+        paid: false,
+      });
+
+      await this.logRequest(payment, 'CREATE_INVOICE', body, data, 'Invoice үүсгэх хүсэлт');
       return data;
     } catch (error) {
       const err = error as any;
@@ -143,6 +242,20 @@ export class QpayService {
 
       const paid = data.count > 0 && data.rows.some((r) => r.payment_status === 'PAID');
 
+      const existing = await this.paymentRepo.findOne({ invoiceId });
+      const payment = await this.upsertPayment({
+        orderId: existing?.orderId,
+        invoiceId,
+        amount: existing?.amount,
+        qpayShortUrl: existing?.qpayShortUrl,
+        status: paid ? 'PAID' : 'PENDING',
+        paid,
+        paidAmount: data.paid_amount,
+        paymentId: existing?.paymentId,
+        paidAt: paid ? new Date() : existing?.paidAt,
+      });
+
+      await this.logRequest(payment, 'CHECK_PAYMENT', { invoiceId }, data, 'Төлбөр шалгах хүсэлт');
       this.logger.log(`Төлбөрийн төлөв: invoice_id=${invoiceId}, paid=${paid}`);
       return { paid, data };
     } catch (error) {
@@ -153,6 +266,27 @@ export class QpayService {
       );
       throw new InternalServerErrorException('QPay төлбөр шалгахад алдаа гарлаа');
     }
+  }
+
+  async registerCallback(body: Record<string, any>): Promise<void> {
+    const invoiceId = body.invoice_id || body.payment_id;
+    const result = await this.checkPayment(invoiceId);
+    const existing = await this.paymentRepo.findOne({ invoiceId });
+
+    const payment = await this.upsertPayment({
+      orderId: existing?.orderId,
+      invoiceId,
+      amount: existing?.amount,
+      qpayShortUrl: existing?.qpayShortUrl,
+      paymentId: body.qpay_payment_id ?? body.payment_id ?? invoiceId,
+      status: result.paid ? 'PAID' : 'UNPAID',
+      paid: result.paid,
+      paidAmount: result.data.paid_amount,
+      paidAt: result.paid ? new Date() : existing?.paidAt,
+      callbackReceivedAt: new Date(),
+    });
+
+    await this.logRequest(payment, 'CALLBACK', body, result.data, 'QPay callback ирж бүртгэв');
   }
 
   // ─── 4. Invoice цуцлах ────────────────────────────────────────────────────
@@ -166,6 +300,20 @@ export class QpayService {
           headers: { Authorization: `Bearer ${token}` },
         }),
       );
+
+      const existing = await this.paymentRepo.findOne({ invoiceId });
+      if (existing) {
+        const payment = await this.upsertPayment({
+          orderId: existing.orderId,
+          invoiceId,
+          amount: existing.amount,
+          status: 'CANCELLED',
+          paid: false,
+          paymentId: existing.paymentId,
+        });
+        await this.logRequest(payment, 'CANCEL_INVOICE', { invoiceId }, null, 'Invoice цуцлах хүсэлт');
+      }
+
       this.logger.log(`Invoice цуцлагдлаа: ${invoiceId}`);
     } catch (error) {
       const err = error as any;

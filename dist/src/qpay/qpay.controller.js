@@ -24,7 +24,7 @@ class CreateInvoiceRequest {
 let QpayController = QpayController_1 = class QpayController {
     qpayService;
     logger = new common_1.Logger(QpayController_1.name);
-    baseUrl = 'https://qpay-payment-1.onrender.com';
+    baseUrl = process.env.BASE_URL;
     constructor(qpayService) {
         this.qpayService = qpayService;
     }
@@ -54,13 +54,7 @@ let QpayController = QpayController_1 = class QpayController {
             this.logger.error('Callback дата дотроос invoice_id эсвэл payment_id олдсонгүй');
             return { received: false };
         }
-        const result = await this.qpayService.checkPayment(invoiceId);
-        if (result.paid) {
-            this.logger.log(`Төлбөр баталгаажлаа: invoice_id=${invoiceId}`);
-        }
-        else {
-            this.logger.warn(`Төлбөр баталгаажаагүй: invoice_id=${invoiceId}`);
-        }
+        await this.qpayService.registerCallback(body);
         return { received: true };
     }
     async cancelInvoice(invoiceId) {

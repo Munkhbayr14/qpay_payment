@@ -81,14 +81,7 @@ export class QpayController {
       return { received: false };
     }
 
-    const result = await this.qpayService.checkPayment(invoiceId);
-
-    if (result.paid) {
-      this.logger.log(`Төлбөр баталгаажлаа: invoice_id=${invoiceId}`);
-      // TODO: Shopify Order-ийг "Paid" болгох
-    } else {
-      this.logger.warn(`Төлбөр баталгаажаагүй: invoice_id=${invoiceId}`);
-    }
+    await this.qpayService.registerCallback(body);
 
     return { received: true };
   }
