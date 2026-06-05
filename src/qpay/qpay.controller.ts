@@ -39,7 +39,8 @@ export class QpayController {
    */
   @Post('invoice')
   @HttpCode(HttpStatus.CREATED)
-  async createInvoice(@Body() body: CreateInvoiceRequest,@Query('cart_token') cartToken: string,) {
+  async createInvoice(@Body() body: CreateInvoiceRequest, @Query('cart_token') cartToken: string,) {
+    this.logger.log(`Ирсэн body мэдээлэл: ${JSON.stringify(body)}`);
     const { amount, callbackUrl } = body;
     if (!cartToken) {
        throw new BadRequestException('Cart token шаардлагатай!');

@@ -166,11 +166,11 @@ export class QpayService {
 
     const body: CreateInvoiceDto = {
       invoice_code: invoiceCode,
-      sender_invoice_no: cleanOrderId, // Цэвэрлэгдсэн ID
+      sender_invoice_no: cleanOrderId,
       invoice_receiver_code: 'terminal',
-      invoice_description: `Order #${cleanOrderId} - ${cleanAmount}₮`,
+      invoice_description: `driftub# ${cleanAmount}₮`,
       sender_branch_code: 'ONLINE',
-      amount: cleanAmount, // Заавал тоо (Number) очих ёстой
+      amount: cleanAmount, 
       callback_url: callbackUrl,
     };
 
