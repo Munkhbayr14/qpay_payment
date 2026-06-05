@@ -22,6 +22,7 @@ import { QpayRequestLog } from './qpay/entities/qpay-request-log.entity';
         entities: [QpayPayment, QpayRequestLog],
         allowGlobalContext: true,
         debug: process.env.NODE_ENV !== 'production',
+        ensureDatabase: true,
       }),
     }),
     QpayModule,
