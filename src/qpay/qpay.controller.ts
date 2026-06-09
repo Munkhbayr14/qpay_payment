@@ -126,7 +126,7 @@ export class QpayController {
       const callbackUrl = `${this.baseUrl}/qpay/callback?order_id=${orderId}`;
 
       // ─── ЗАСВАР: И-мэйл явуулах дата бэлдэц үүсгэх ──────────────────────────────
-      const checkoutDto = {
+      const checkoutDto: any = {
         orderId,
         amount: Number(amount),
         email,
@@ -138,6 +138,16 @@ export class QpayController {
         product_details: query.product_details || 'Drift.ub Захиалга',
         callbackUrl,
       };
+
+      if (query.items) {
+        try {
+          checkoutDto.items = typeof query.items === 'string'
+            ? JSON.parse(query.items)
+            : query.items;
+        } catch {
+          this.logger.warn('checkout query дахь items JSON файлыг задлахад алдаа гарлаа');
+        }
+      }
 
       // ─── ЗАСВАР: Хэрэглэгчийн дата-г description болгон нууж QPay нэхэмжлэх үүсгэнэ
       const qpayResponse = await this.qpayService.createInvoice(

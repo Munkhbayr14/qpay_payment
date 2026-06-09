@@ -189,6 +189,8 @@ async processCheckout(checkoutDto: any) {
       ? `driftub:${cleanOrderId} ${cleanAmount}₮`
       : description ?? `driftub:${cleanOrderId} ${cleanAmount}₮`;
 
+    const metadata = description ?? `driftub:${cleanOrderId} ${cleanAmount}₮`;
+
     if (description && description.length > 240) {
       this.logger.warn('invoice_description урт хэтэрсэн тул товчилж байна');
     }
@@ -228,7 +230,7 @@ async processCheckout(checkoutDto: any) {
         qpayShortUrl: data.qPay_shortUrl,
         status: 'PENDING',
         paid: false,
-        metadata: description ?? body.invoice_description,
+        metadata,
       });
 
       await this.logRequest(payment, 'CREATE_INVOICE', body, data, 'Invoice үүсгэх хүсэлт');
