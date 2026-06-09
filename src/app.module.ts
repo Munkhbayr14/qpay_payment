@@ -7,6 +7,7 @@ import { PostgreSqlDriver } from '@mikro-orm/postgresql';
 import { QpayModule } from './qpay/qpay.module';
 import { QpayPayment } from './qpay/entities/qpay-payment.entity';
 import { QpayRequestLog } from './qpay/entities/qpay-request-log.entity';
+import { EmailModule } from './email/email.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { QpayRequestLog } from './qpay/entities/qpay-request-log.entity';
       }),
     }),
     QpayModule,
+    EmailModule,
   ],
   controllers: [],
   providers: [],

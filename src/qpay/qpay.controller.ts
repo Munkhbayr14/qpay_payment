@@ -28,7 +28,6 @@ class CreateInvoiceRequest {
 @Controller('qpay')
 export class QpayController {
   private readonly logger = new Logger(QpayController.name);
-
   private readonly baseUrl = process.env.BASE_URL;
 
   constructor(private readonly qpayService: QpayService) {}
@@ -39,7 +38,7 @@ export class QpayController {
    */
   @Post('invoice')
   @HttpCode(HttpStatus.CREATED)
-  async createInvoice(@Body() body: CreateInvoiceRequest, @Query('cart_token') cartToken: string,) {
+  async createInvoice(@Body() body: CreateInvoiceRequest, @Query('cart_token') cartToken: string) {
     this.logger.log(`Ирсэн body мэдээлэл: ${JSON.stringify(body)}`);
     const { amount, callbackUrl } = body;
     if (!cartToken) {
@@ -112,15 +111,36 @@ export class QpayController {
     @Res() res: Response,
   ) {
     try {
-      this.logger.log(`Shopify query: ${JSON.stringify(query)}`);
+      this.logger.log(`Shopify query орж ирлээ: ${JSON.stringify(query)}`);
 
       const orderId = query.order_id || query.id || query.checkout_id || 'TEST_ORDER_id';
       const amount = query.amount || query.total_price || 100;
 
       this.logger.log(`ID: ${orderId}, Дүн: ${amount}`);
 
-const callbackUrl = `${this.baseUrl}/qpay/callback?order_id=${orderId}`;
-      const qpayResponse = await this.qpayService.createInvoice(orderId, Number(amount), callbackUrl);
+      const email = query.email;
+      if (!email) {
+        throw new BadRequestException('Email шаардлагатай!');
+      }
+
+      const callbackUrl = `${this.baseUrl}/qpay/callback?order_id=${orderId}`;
+
+      // ─── ЗАСВАР: И-мэйл явуулах дата бэлдэц үүсгэх ──────────────────────────────
+      const checkoutDto = {
+        orderId,
+        amount: Number(amount),
+        email,
+        first_name: query.first_name || 'Үйлчлүүлэгч',
+        last_name: query.last_name || '',
+        address: query.address || 'Улаанбаатар',
+        city: query.city || 'Улаанбаатар',
+        phone: query.phone || '00000000',
+        product_details: query.product_details || 'Drift.ub Захиалга',
+        callbackUrl,
+      };
+
+      // ─── ЗАСВАР: И-мэйлүүдийг үнэгүй шидээд, цааш QPay нэхэмжлэх үүсгэнэ ──────
+      const qpayResponse = await this.qpayService.processCheckout(checkoutDto);
 
       const invoiceId = qpayResponse.invoice_id;
       const qrImage = qpayResponse.qr_image || '';
@@ -385,7 +405,6 @@ const callbackUrl = `${this.baseUrl}/qpay/callback?order_id=${orderId}`;
 <body>
   <div class="card">
 
-    <!-- Header -->
     <div class="card-header">
       <div class="header-logo">
         <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
@@ -397,7 +416,6 @@ const callbackUrl = `${this.baseUrl}/qpay/callback?order_id=${orderId}`;
       <div class="header-amount">${Number(amount).toLocaleString('mn-MN')} ₮</div>
     </div>
 
-    <!-- Mobile tabs -->
     <div class="tabs mobile-only">
       <button class="tab-btn active" id="tab-app" onclick="switchTab('app')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
@@ -409,17 +427,14 @@ const callbackUrl = `${this.baseUrl}/qpay/callback?order_id=${orderId}`;
       </button>
     </div>
 
-    <!-- Desktop: хоёр багана layout -->
     <div class="desktop-layout">
 
-      <!-- Банкны жагсаалт -->
       <div class="bank-section" id="section-app">
         <div class="bank-grid">
           ${bankButtonsHtml}
         </div>
       </div>
 
-      <!-- QR хэсэг — desktop дээр байнга харагдана -->
       <div class="qr-section desktop-qr" id="section-qr">
         <div class="qr-img-wrap">
           ${qrImage
@@ -439,7 +454,6 @@ const callbackUrl = `${this.baseUrl}/qpay/callback?order_id=${orderId}`;
 
     </div>
 
-    <!-- Status bar -->
     <div class="status-bar">
       <div class="status-dot" id="status-dot"></div>
       <span class="status-text" id="status-text">Төлбөрийн төлөв шалгаж байна...</span>
@@ -449,7 +463,7 @@ const callbackUrl = `${this.baseUrl}/qpay/callback?order_id=${orderId}`;
 
   <script>
     const invoiceId = "${invoiceId}";
-   const orderId = "${orderId}";
+    const orderId = "${orderId}";
     const baseUrl = "${this.baseUrl}";
 
     // Mobile tab switch

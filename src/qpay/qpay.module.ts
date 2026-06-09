@@ -5,6 +5,7 @@ import { QpayService } from './qpay.service';
 import { QpayController } from './qpay.controller';
 import { QpayPayment } from './entities/qpay-payment.entity';
 import { QpayRequestLog } from './entities/qpay-request-log.entity';
+import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { QpayRequestLog } from './entities/qpay-request-log.entity';
       maxRedirects: 3,
     }),
     MikroOrmModule.forFeature([QpayPayment, QpayRequestLog]),
+    EmailModule
   ],
   controllers: [QpayController],
   providers: [QpayService],

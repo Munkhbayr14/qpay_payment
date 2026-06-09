@@ -12,6 +12,7 @@ import {
 } from './interface/qpay.interface';
 import { QpayPayment } from './entities/qpay-payment.entity';
 import { QpayRequestLog } from './entities/qpay-request-log.entity';
+import { EmailService } from '../email/email.service';
 
 @Injectable()
 export class QpayService {
@@ -29,6 +30,7 @@ export class QpayService {
     private readonly paymentRepo: EntityRepository<QpayPayment>,
     @InjectRepository(QpayRequestLog)
     private readonly logRepo: EntityRepository<QpayRequestLog>,
+    private readonly emailService: EmailService
   ) {}
 
   private safeJson(value: any): string | undefined {
@@ -150,7 +152,23 @@ export class QpayService {
       throw new InternalServerErrorException('QPay authentication амжилтгүй боллоо');
     }
   }
+async processCheckout(checkoutDto: any) {
+    // 1. QPay-нэхэмжлэхийг эхлээд үүсгэнэ, дараа и-мэйл явуулна.
+    const callbackUrl = checkoutDto.callbackUrl || 'https://pay.driftub.store/api/qpay/callback';
+    const qpayInvoice = await this.createInvoice(
+      checkoutDto.orderId,
+      checkoutDto.amount,
+      callbackUrl,
+    );
 
+    try {
+      await this.emailService.sendOrderConfirmation(checkoutDto);
+    } catch (error) {
+      this.logger.error('И-мэйл илгээхэд алдаа гарлаа', error);
+    }
+
+    return qpayInvoice;
+  }
   // ─── 2. Invoice үүсгэх ────────────────────────────────────────────────────
 
   async createInvoice(
@@ -168,7 +186,7 @@ export class QpayService {
       invoice_code: invoiceCode,
       sender_invoice_no: cleanOrderId,
       invoice_receiver_code: 'terminal',
-      invoice_description: `driftub# ${cleanAmount}₮`,
+      invoice_description: `driftub:${cleanOrderId} ${cleanAmount}₮`,
       sender_branch_code: 'ONLINE',
       amount: cleanAmount, 
       callback_url: callbackUrl,
