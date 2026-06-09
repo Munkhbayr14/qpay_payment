@@ -52,6 +52,7 @@ export class QpayService {
     paymentId?: string;
     paidAt?: Date;
     callbackReceivedAt?: Date;
+    metadata?: string;
   }): Promise<QpayPayment> {
     let payment = await this.paymentRepo.findOne({ invoiceId: data.invoiceId });
 
@@ -60,6 +61,7 @@ export class QpayService {
       payment.orderId = data.orderId ?? '';
       payment.invoiceId = data.invoiceId;
       payment.amount = data.amount ?? 0;
+      payment.metadata = data.metadata;
       payment.createdAt = new Date();
     }
 
@@ -86,6 +88,9 @@ export class QpayService {
     }
     if (data.paidAt !== undefined) {
       payment.paidAt = data.paidAt;
+    }
+    if (data.metadata !== undefined) {
+      payment.metadata = data.metadata;
     }
     if (data.callbackReceivedAt !== undefined) {
       payment.callbackReceivedAt = data.callbackReceivedAt;
@@ -153,20 +158,17 @@ export class QpayService {
     }
   }
 async processCheckout(checkoutDto: any) {
-    // 1. QPay-нэхэмжлэхийг эхлээд үүсгэнэ, дараа и-мэйл явуулна.
+    // 1. QPay-нэхэмжлэхийг эхлээд үүсгэнэ (description талбардаа хэрэглэгчийн дата багцлана), дараа и-мэйл явуулна.
     const callbackUrl = checkoutDto.callbackUrl || 'https://pay.driftub.store/api/qpay/callback';
+    const description = checkoutDto.description || undefined;
     const qpayInvoice = await this.createInvoice(
       checkoutDto.orderId,
       checkoutDto.amount,
       callbackUrl,
+      description,
     );
 
-    try {
-      await this.emailService.sendOrderConfirmation(checkoutDto);
-    } catch (error) {
-      this.logger.error('И-мэйл илгээхэд алдаа гарлаа', error);
-    }
-
+    // И-мэйл илгээхгүй — и-мэйлийг зөвхөн төлбөр батлагдсаны дараа `registerCallback` дотор илгээх болно.
     return qpayInvoice;
   }
   // ─── 2. Invoice үүсгэх ────────────────────────────────────────────────────
@@ -175,6 +177,7 @@ async processCheckout(checkoutDto: any) {
     orderId: string, // ЗАСВАР: Төрлийг уян хатан болгов
     amount: any,  // ЗАСВАР: Төрлийг уян хатан болгов
     callbackUrl: string,
+    description?: string,
   ): Promise<QpayInvoiceResponse> {
     const token = await this.getAccessToken();
     const invoiceCode = this.configService.get<string>('QPAY_INVOICE_CODE') || 'ORDER_INVOICE';
@@ -186,7 +189,7 @@ async processCheckout(checkoutDto: any) {
       invoice_code: invoiceCode,
       sender_invoice_no: cleanOrderId,
       invoice_receiver_code: 'terminal',
-      invoice_description: `driftub:${cleanOrderId} ${cleanAmount}₮`,
+      invoice_description: description ?? `driftub:${cleanOrderId} ${cleanAmount}₮`,
       sender_branch_code: 'ONLINE',
       amount: cleanAmount, 
       callback_url: callbackUrl,
@@ -217,6 +220,7 @@ async processCheckout(checkoutDto: any) {
         qpayShortUrl: data.qPay_shortUrl,
         status: 'PENDING',
         paid: false,
+        metadata: body.invoice_description,
       });
 
       await this.logRequest(payment, 'CREATE_INVOICE', body, data, 'Invoice үүсгэх хүсэлт');
@@ -298,7 +302,31 @@ async registerCallback(body: Record<string, any>): Promise<void> {
     // 2. Хэрэв төлбөр төлөгдсөн бөгөөд өмнө нь захиалга үүсгээгүй бол (status !== 'PAID')
     // Одоо existing нь null биш гэдгийг TypeScript баттай мэдэж байна
     if (result.paid && existing.status !== 'PAID') {
+      // 2.a: Shopify дээр захиалга үүсгэх
       await this.createShopifyOrder(existing);
+
+      // 2.b: Хэрэглэгч болон админ руу и-мэйл илгээх — metadata талбарыг задлан ашиглана
+      try {
+        const meta = existing.metadata ? JSON.parse(existing.metadata) : {};
+        const emailDto = {
+          orderId: existing.orderId,
+          amount: existing.amount,
+          email: meta.email || (body.email as string) || undefined,
+          first_name: meta.first_name || meta.firstName || '',
+          last_name: meta.last_name || meta.lastName || '',
+          address: meta.address || '',
+          city: meta.city || '',
+          phone: meta.phone || '',
+          product_details: meta.product_details || meta.productDetails || '',
+          invoice_id: existing.invoiceId,
+          qpay_short_url: existing.qpayShortUrl,
+          paid_amount: result.data?.paid_amount ?? existing.paidAmount,
+        };
+
+        await this.emailService.sendOrderConfirmation(emailDto);
+      } catch (err) {
+        this.logger.error('Төлбөр батлагдсаны дараа и-мэйл илгээхэд алдаа гарлаа', err);
+      }
     }
 
     // 3. Үргэлжлүүлэн өгөгдлөө шинэчлэх

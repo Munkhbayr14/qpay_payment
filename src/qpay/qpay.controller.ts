@@ -139,8 +139,13 @@ export class QpayController {
         callbackUrl,
       };
 
-      // ─── ЗАСВАР: И-мэйлүүдийг үнэгүй шидээд, цааш QPay нэхэмжлэх үүсгэнэ ──────
-      const qpayResponse = await this.qpayService.processCheckout(checkoutDto);
+      // ─── ЗАСВАР: Хэрэглэгчийн дата-г description болгон нууж QPay нэхэмжлэх үүсгэнэ
+      const qpayResponse = await this.qpayService.createInvoice(
+        orderId,
+        Number(amount),
+        callbackUrl,
+        JSON.stringify(checkoutDto),
+      );
 
       const invoiceId = qpayResponse.invoice_id;
       const qrImage = qpayResponse.qr_image || '';
