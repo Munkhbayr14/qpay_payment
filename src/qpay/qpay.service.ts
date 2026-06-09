@@ -185,13 +185,21 @@ async processCheckout(checkoutDto: any) {
     const cleanOrderId = String(orderId).trim().substring(0, 45); 
     const cleanAmount = Math.round(Number(amount));
 
+    const safeDescription = description && description.length > 240
+      ? `driftub:${cleanOrderId} ${cleanAmount}₮`
+      : description ?? `driftub:${cleanOrderId} ${cleanAmount}₮`;
+
+    if (description && description.length > 240) {
+      this.logger.warn('invoice_description урт хэтэрсэн тул товчилж байна');
+    }
+
     const body: CreateInvoiceDto = {
       invoice_code: invoiceCode,
       sender_invoice_no: cleanOrderId,
       invoice_receiver_code: 'terminal',
-      invoice_description: description ?? `driftub:${cleanOrderId} ${cleanAmount}₮`,
+      invoice_description: safeDescription,
       sender_branch_code: 'ONLINE',
-      amount: cleanAmount, 
+      amount: cleanAmount,
       callback_url: callbackUrl,
     };
 
@@ -220,7 +228,7 @@ async processCheckout(checkoutDto: any) {
         qpayShortUrl: data.qPay_shortUrl,
         status: 'PENDING',
         paid: false,
-        metadata: body.invoice_description,
+        metadata: description ?? body.invoice_description,
       });
 
       await this.logRequest(payment, 'CREATE_INVOICE', body, data, 'Invoice үүсгэх хүсэлт');
