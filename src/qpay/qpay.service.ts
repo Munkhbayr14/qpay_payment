@@ -19,7 +19,6 @@ export class QpayService {
   private readonly logger = new Logger(QpayService.name);
   private readonly payUrl = process.env.PAY_URL;
 
-  // Token cache — production дээр Redis ашиглахыг зөвлөнө
   private accessToken: string | null = null;
   private tokenExpiresAt: number = 0;
 
@@ -30,7 +29,7 @@ export class QpayService {
     private readonly paymentRepo: EntityRepository<QpayPayment>,
     @InjectRepository(QpayRequestLog)
     private readonly logRepo: EntityRepository<QpayRequestLog>,
-    private readonly emailService: EmailService
+    private readonly emailService: EmailService,
   ) {}
 
   private safeJson(value: any): string | undefined {
@@ -65,36 +64,16 @@ export class QpayService {
       payment.createdAt = new Date();
     }
 
-    if (data.orderId !== undefined && data.orderId !== '') {
-      payment.orderId = data.orderId;
-    }
-    if (data.amount !== undefined) {
-      payment.amount = data.amount;
-    }
-    if (data.qpayShortUrl !== undefined) {
-      payment.qpayShortUrl = data.qpayShortUrl;
-    }
-    if (data.status !== undefined) {
-      payment.status = data.status;
-    }
-    if (data.paid !== undefined) {
-      payment.paid = data.paid;
-    }
-    if (data.paidAmount !== undefined) {
-      payment.paidAmount = data.paidAmount;
-    }
-    if (data.paymentId !== undefined) {
-      payment.paymentId = data.paymentId;
-    }
-    if (data.paidAt !== undefined) {
-      payment.paidAt = data.paidAt;
-    }
-    if (data.metadata !== undefined) {
-      payment.metadata = data.metadata;
-    }
-    if (data.callbackReceivedAt !== undefined) {
-      payment.callbackReceivedAt = data.callbackReceivedAt;
-    }
+    if (data.orderId !== undefined && data.orderId !== '') payment.orderId = data.orderId;
+    if (data.amount !== undefined) payment.amount = data.amount;
+    if (data.qpayShortUrl !== undefined) payment.qpayShortUrl = data.qpayShortUrl;
+    if (data.status !== undefined) payment.status = data.status;
+    if (data.paid !== undefined) payment.paid = data.paid;
+    if (data.paidAmount !== undefined) payment.paidAmount = data.paidAmount;
+    if (data.paymentId !== undefined) payment.paymentId = data.paymentId;
+    if (data.paidAt !== undefined) payment.paidAt = data.paidAt;
+    if (data.metadata !== undefined) payment.metadata = data.metadata;
+    if (data.callbackReceivedAt !== undefined) payment.callbackReceivedAt = data.callbackReceivedAt;
 
     payment.updatedAt = new Date();
     await this.paymentRepo.getEntityManager().persistAndFlush(payment);
@@ -118,16 +97,27 @@ export class QpayService {
     return log;
   }
 
-  // ─── 1. Access Token авах ──────────────────────────────────────────────────
+  // ─── 1. Access Token авах ─────────────────────────────────────────────────
 
-  async getAccessToken(): Promise<string> {
-    // Token хүчинтэй байвал cache-ээс буцаа (30 секунд нөөцтэй)
-    if (this.accessToken && Date.now() < this.tokenExpiresAt - 30_000) {
+  async getAccessToken(forceRefresh = false): Promise<string> {
+    // forceRefresh=false үед cache хүчинтэй бол буцаана
+    if (!forceRefresh && this.accessToken && Date.now() < this.tokenExpiresAt - 30_000) {
       return this.accessToken;
     }
 
+    // Cache цэвэрлэ
+    this.accessToken = null;
+    this.tokenExpiresAt = 0;
+
     const username = this.configService.get<string>('QPAY_USERNAME');
     const password = this.configService.get<string>('QPAY_PASSWORD');
+
+    // Credentials байхгүй бол эрт алдаа шидэ
+    if (!username || !password) {
+      this.logger.error('QPAY_USERNAME эсвэл QPAY_PASSWORD .env-д тохируулаагүй байна!');
+      throw new InternalServerErrorException('QPay credentials тохиргоогүй байна');
+    }
+
     const credentials = Buffer.from(`${username}:${password}`).toString('base64');
 
     try {
@@ -146,21 +136,28 @@ export class QpayService {
         ),
       );
 
-      this.accessToken = data.access_token;
-      this.tokenExpiresAt = Date.now() + data.expires_in * 1000;
+      if (!data.access_token) {
+        throw new Error('QPay-с хоосон token ирлээ');
+      }
 
-      this.logger.log('QPay token амжилттай авлаа');
+      this.accessToken = data.access_token;
+      this.tokenExpiresAt = Date.now() + (data.expires_in ?? 3600) * 1000;
+
+      this.logger.log(`QPay token амжилттай авлаа, expires_in=${data.expires_in ?? 3600}s`);
       return this.accessToken;
     } catch (error) {
       const err = error as any;
-      this.logger.error('QPay token авахад алдаа гарлаа', err?.response?.data ?? err?.message);
+      this.logger.error('QPay token авахад алдаа:', err?.response?.data ?? err?.message);
       throw new InternalServerErrorException('QPay authentication амжилтгүй боллоо');
     }
   }
-async processCheckout(checkoutDto: any) {
-    // 1. QPay-нэхэмжлэхийг эхлээд үүсгэнэ (description талбардаа хэрэглэгчийн дата багцлана), дараа и-мэйл явуулна.
+
+  // ─── 2. Checkout боловсруулах ─────────────────────────────────────────────
+
+  async processCheckout(checkoutDto: any) {
     const callbackUrl = checkoutDto.callbackUrl || 'https://pay.driftub.store/api/qpay/callback';
     const description = checkoutDto.description || undefined;
+
     const qpayInvoice = await this.createInvoice(
       checkoutDto.orderId,
       checkoutDto.amount,
@@ -168,28 +165,36 @@ async processCheckout(checkoutDto: any) {
       description,
     );
 
-    // И-мэйл илгээхгүй — и-мэйлийг зөвхөн төлбөр батлагдсаны дараа `registerCallback` дотор илгээх болно.
     return qpayInvoice;
   }
-  // ─── 2. Invoice үүсгэх ────────────────────────────────────────────────────
+
+  // ─── 3. Invoice үүсгэх ────────────────────────────────────────────────────
 
   async createInvoice(
-    orderId: string, // ЗАСВАР: Төрлийг уян хатан болгов
-    amount: any,  // ЗАСВАР: Төрлийг уян хатан болгов
+    orderId: string,
+    amount: any,
     callbackUrl: string,
     description?: string,
   ): Promise<QpayInvoiceResponse> {
-    const token = await this.getAccessToken();
+    return this._createInvoiceWithRetry(orderId, amount, callbackUrl, description, false);
+  }
+
+  private async _createInvoiceWithRetry(
+    orderId: string,
+    amount: any,
+    callbackUrl: string,
+    description: string | undefined,
+    isRetry: boolean,
+  ): Promise<QpayInvoiceResponse> {
+    const token = await this.getAccessToken(isRetry);
     const invoiceCode = this.configService.get<string>('QPAY_INVOICE_CODE') || 'ORDER_INVOICE';
 
-    const cleanOrderId = String(orderId).trim().substring(0, 45); 
-    const cleanAmount = Math.round(Number(amount));
+    const cleanOrderId = String(orderId).trim().substring(0, 45);
+    const cleanAmount  = Math.round(Number(amount));
+    const fallback     = `driftub:${cleanOrderId} ${cleanAmount}₮`;
 
-    const safeDescription = description && description.length > 240
-      ? `driftub:${cleanOrderId} ${cleanAmount}₮`
-      : description ?? `driftub:${cleanOrderId} ${cleanAmount}₮`;
-
-    const metadata = description ?? `driftub:${cleanOrderId} ${cleanAmount}₮`;
+    const safeDescription =
+      description && description.length <= 240 ? description : fallback;
 
     if (description && description.length > 240) {
       this.logger.warn('invoice_description урт хэтэрсэн тул товчилж байна');
@@ -230,13 +235,23 @@ async processCheckout(checkoutDto: any) {
         qpayShortUrl: data.qPay_shortUrl,
         status: 'PENDING',
         paid: false,
-        metadata,
+        metadata: description ?? fallback,
       });
 
       await this.logRequest(payment, 'CREATE_INVOICE', body, data, 'Invoice үүсгэх хүсэлт');
       return data;
     } catch (error) {
       const err = error as any;
+      const status = err?.response?.status;
+
+      // 401 ирвэл token шинэчилж нэг удаа retry хийнэ
+      if (status === 401 && !isRetry) {
+        this.logger.warn('Invoice 401 авлаа — token шинэчилж retry хийж байна...');
+        this.accessToken = null;
+        this.tokenExpiresAt = 0;
+        return this._createInvoiceWithRetry(orderId, amount, callbackUrl, description, true);
+      }
+
       this.logger.error(
         `Invoice үүсгэхэд алдаа: order=${cleanOrderId}`,
         err?.response?.data ?? err?.message,
@@ -245,10 +260,13 @@ async processCheckout(checkoutDto: any) {
     }
   }
 
-  // ─── 3. Төлбөр шалгах ────────────────────────────────────────────────────
+  // ─── 4. Төлбөр шалгах ────────────────────────────────────────────────────
 
-  async checkPayment(invoiceId: string): Promise<{ paid: boolean; data: QpayPaymentCheckResponse }> {
-    const token = await this.getAccessToken();
+  async checkPayment(
+    invoiceId: string,
+    isRetry = false,
+  ): Promise<{ paid: boolean; data: QpayPaymentCheckResponse }> {
+    const token = await this.getAccessToken(isRetry);
 
     try {
       this.logger.log(`Төлбөр шалгаж байна: invoice_id=${invoiceId}`);
@@ -273,7 +291,7 @@ async processCheckout(checkoutDto: any) {
       const paid = data.count > 0 && data.rows.some((r) => r.payment_status === 'PAID');
 
       const existing = await this.paymentRepo.findOne({ invoiceId });
-      const payment = await this.upsertPayment({
+      const payment  = await this.upsertPayment({
         orderId: existing?.orderId,
         invoiceId,
         amount: existing?.amount,
@@ -290,6 +308,15 @@ async processCheckout(checkoutDto: any) {
       return { paid, data };
     } catch (error) {
       const err = error as any;
+
+      // 401 ирвэл token шинэчилж нэг удаа retry хийнэ
+      if (err?.response?.status === 401 && !isRetry) {
+        this.logger.warn('checkPayment 401 — token шинэчилж retry хийж байна...');
+        this.accessToken = null;
+        this.tokenExpiresAt = 0;
+        return this.checkPayment(invoiceId, true);
+      }
+
       this.logger.error(
         `Төлбөр шалгахад алдаа: invoice_id=${invoiceId}`,
         err?.response?.data ?? err?.message,
@@ -298,39 +325,36 @@ async processCheckout(checkoutDto: any) {
     }
   }
 
-async registerCallback(body: Record<string, any>): Promise<void> {
+  // ─── 5. Callback бүртгэх ─────────────────────────────────────────────────
+
+  async registerCallback(body: Record<string, any>): Promise<void> {
     const invoiceId = body.invoice_id || body.payment_id;
-    const result = await this.checkPayment(invoiceId);
+    const result   = await this.checkPayment(invoiceId);
     const existing = await this.paymentRepo.findOne({ invoiceId });
 
-    // 1. ШАЛГАЛТ: Хэрэв existing олдоогүй бол цааш үргэлжлүүлэхгүй
     if (!existing) {
       this.logger.error(`Callback ирсэн боловч датабаазаас бичлэг олдсонгүй: ${invoiceId}`);
       return;
     }
 
-    // 2. Хэрэв төлбөр төлөгдсөн бөгөөд өмнө нь захиалга үүсгээгүй бол (status !== 'PAID')
-    // Одоо existing нь null биш гэдгийг TypeScript баттай мэдэж байна
     if (result.paid && existing.status !== 'PAID') {
-      // 2.a: Shopify дээр захиалга үүсгэх
       await this.createShopifyOrder(existing);
 
-      // 2.b: Хэрэглэгч болон админ руу и-мэйл илгээх — metadata талбарыг задлан ашиглана
       try {
         const meta = existing.metadata ? JSON.parse(existing.metadata) : {};
         const emailDto = {
-          orderId: existing.orderId,
-          amount: existing.amount,
-          email: meta.email || (body.email as string) || undefined,
-          first_name: meta.first_name || meta.firstName || '',
-          last_name: meta.last_name || meta.lastName || '',
-          address: meta.address || '',
-          city: meta.city || '',
-          phone: meta.phone || '',
+          orderId:       existing.orderId,
+          amount:        existing.amount,
+          email:         meta.email || (body.email as string) || undefined,
+          first_name:    meta.first_name  || meta.firstName  || '',
+          last_name:     meta.last_name   || meta.lastName   || '',
+          address:       meta.address     || '',
+          city:          meta.city        || '',
+          phone:         meta.phone       || '',
           product_details: meta.product_details || meta.productDetails || '',
-          invoice_id: existing.invoiceId,
+          invoice_id:    existing.invoiceId,
           qpay_short_url: existing.qpayShortUrl,
-          paid_amount: result.data?.paid_amount ?? existing.paidAmount,
+          paid_amount:   result.data?.paid_amount ?? existing.paidAmount,
         };
 
         await this.emailService.sendOrderConfirmation(emailDto);
@@ -339,24 +363,23 @@ async registerCallback(body: Record<string, any>): Promise<void> {
       }
     }
 
-    // 3. Үргэлжлүүлэн өгөгдлөө шинэчлэх
     const payment = await this.upsertPayment({
-      orderId: existing.orderId,
+      orderId:            existing.orderId,
       invoiceId,
-      amount: existing.amount,
-      qpayShortUrl: existing.qpayShortUrl,
-      paymentId: body.qpay_payment_id ?? body.payment_id ?? invoiceId,
-      status: result.paid ? 'PAID' : 'UNPAID',
-      paid: result.paid,
-      paidAmount: result.data.paid_amount,
-      paidAt: result.paid ? new Date() : existing.paidAt,
+      amount:             existing.amount,
+      qpayShortUrl:       existing.qpayShortUrl,
+      paymentId:          body.qpay_payment_id ?? body.payment_id ?? invoiceId,
+      status:             result.paid ? 'PAID' : 'UNPAID',
+      paid:               result.paid,
+      paidAmount:         result.data.paid_amount,
+      paidAt:             result.paid ? new Date() : existing.paidAt,
       callbackReceivedAt: new Date(),
     });
 
     await this.logRequest(payment, 'CALLBACK', body, result.data, 'QPay callback ирж бүртгэв');
   }
 
-  // ─── 4. Invoice цуцлах ────────────────────────────────────────────────────
+  // ─── 6. Invoice цуцлах ────────────────────────────────────────────────────
 
   async cancelInvoice(invoiceId: string): Promise<void> {
     const token = await this.getAccessToken();
@@ -371,11 +394,11 @@ async registerCallback(body: Record<string, any>): Promise<void> {
       const existing = await this.paymentRepo.findOne({ invoiceId });
       if (existing) {
         const payment = await this.upsertPayment({
-          orderId: existing.orderId,
+          orderId:   existing.orderId,
           invoiceId,
-          amount: existing.amount,
-          status: 'CANCELLED',
-          paid: false,
+          amount:    existing.amount,
+          status:    'CANCELLED',
+          paid:      false,
           paymentId: existing.paymentId,
         });
         await this.logRequest(payment, 'CANCEL_INVOICE', { invoiceId }, null, 'Invoice цуцлах хүсэлт');
@@ -388,40 +411,41 @@ async registerCallback(body: Record<string, any>): Promise<void> {
       throw new InternalServerErrorException('Invoice цуцлахад алдаа гарлаа');
     }
   }
-async createShopifyOrder(payment: QpayPayment) {
+
+  // ─── 7. Shopify захиалга үүсгэх ──────────────────────────────────────────
+
+  async createShopifyOrder(payment: QpayPayment) {
     const storeDomain = this.configService.get<string>('SHOPIFY_STORE_DOMAIN');
     const accessToken = this.configService.get<string>('SHOPIFY_ACCESS_TOKEN');
 
-    // Хэрэв тохиргоо байхгүй бол шууд алдаа шидэх (Аюулгүй байдал)
     if (!storeDomain || !accessToken) {
       this.logger.error('Shopify тохиргоо дутуу байна: Domain эсвэл Access Token олдсонгүй');
       throw new InternalServerErrorException('Shopify тохиргооны алдаа');
     }
-    
+
     const url = `https://${storeDomain}/admin/api/2026-04/orders.json`;
 
     const orderPayload = {
       order: {
         note: `QPay-ээр төлөгдсөн. Сагсны ID: ${payment.orderId}`,
-        financial_status: "paid",
+        financial_status: 'paid',
         line_items: [
           {
-            title: "QPay Төлбөр",
-            price: payment.amount,
-            quantity: 1
-          }
-        ]
-      }
+            title:    'QPay Төлбөр',
+            price:    payment.amount,
+            quantity: 1,
+          },
+        ],
+      },
     };
 
     try {
-      this.logger.log(`Shopify руу захиалга илгээж байна...`);
+      this.logger.log('Shopify руу захиалга илгээж байна...');
 
       const response = await fetch(url, {
         method: 'POST',
         headers: {
-          // Энд accessToken нь дээрх if-ээр шалгагдсан тул string гэдэг нь тодорхой болно
-          'X-Shopify-Access-Token': accessToken, 
+          'X-Shopify-Access-Token': accessToken,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(orderPayload),
@@ -430,7 +454,6 @@ async createShopifyOrder(payment: QpayPayment) {
       const data = await response.json();
 
       if (!response.ok) {
-        // Shopify-аас ирсэн алдааны мессежийг нарийн харах
         this.logger.error(`Shopify API Error: ${JSON.stringify(data)}`);
         throw new Error(JSON.stringify(data));
       }
