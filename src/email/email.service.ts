@@ -1,8 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { MailerService } from '@nestjs-modules/mailer';
 
 @Injectable()
 export class EmailService {
+  private readonly logger = new Logger(EmailService.name);
+
   constructor(private readonly mailerService: MailerService) {}
 
   async sendOrderConfirmation(dto: any) {
@@ -22,14 +24,17 @@ export class EmailService {
       items,
     } = dto;
 
-    const fullName = `${last_name || ''} ${first_name || ''}`.trim();
+    const fullName    = `${last_name || ''} ${first_name || ''}`.trim() || 'Хэрэглэгч';
+    const displayId   = orderId || invoice_id || '';
+    const displayAmt  = paid_amount ?? amount ?? '';
 
-    const renderItems = () => {
+    // Барааны жагсаалт HTML
+    const renderItems = (): string => {
       if (Array.isArray(items) && items.length > 0) {
         return `
           <table style="width:100%;border-collapse:collapse;margin-top:12px">
             <thead>
-              <tr>
+              <tr style="background:#f5f5f5">
                 <th style="text-align:left;padding:8px;border-bottom:1px solid #eee">Бараа</th>
                 <th style="text-align:right;padding:8px;border-bottom:1px solid #eee">Үнэ</th>
                 <th style="text-align:center;padding:8px;border-bottom:1px solid #eee">Тоо</th>
@@ -39,74 +44,99 @@ export class EmailService {
               ${items
                 .map(
                   (it: any) => `
-                    <tr>
-                      <td style="padding:8px;border-bottom:1px solid #f6f6f6">${it.title || it.name || ''}</td>
-                      <td style="padding:8px;text-align:right;border-bottom:1px solid #f6f6f6">${it.price ?? ''}</td>
-                      <td style="padding:8px;text-align:center;border-bottom:1px solid #f6f6f6">${it.quantity ?? 1}</td>
-                    </tr>`,
+                <tr>
+                  <td style="padding:8px;border-bottom:1px solid #f6f6f6">${it.title || it.name || ''}</td>
+                  <td style="padding:8px;text-align:right;border-bottom:1px solid #f6f6f6">${Number(it.price ?? 0).toLocaleString()} MNT</td>
+                  <td style="padding:8px;text-align:center;border-bottom:1px solid #f6f6f6">${it.quantity ?? 1}</td>
+                </tr>`,
                 )
                 .join('')}
             </tbody>
-          </table>
-        `;
+          </table>`;
       }
-
-      return `<p style="margin-top:12px">${product_details || ''}</p>`;
+      if (product_details) return `<p style="margin-top:12px">${product_details}</p>`;
+      return '';
     };
 
+    // ── ADMIN EMAIL ──────────────────────────────────────────────────────────
     const adminHtml = `
-      <div style="font-family: Inter, Arial, sans-serif; padding: 20px; color:#111;">
-        <h2 style="color:#d32f2f;margin-bottom:8px">🚨 ШИНЭ ЗАХИАЛГА ИРЛЭЭ</h2>
-        <p style="margin:0 0 8px"><strong>Захиалгын ID:</strong> ${orderId || invoice_id || ''}</p>
-        <p style="margin:0 0 8px"><strong>Нийт дүн:</strong> ${amount ?? paid_amount ?? ''} MNT</p>
+      <div style="font-family:Arial,sans-serif;padding:24px;color:#111;max-width:600px">
+        <h2 style="color:#d32f2f;margin:0 0 16px">🚨 ШИНЭ ЗАХИАЛГА ИРЛЭЭ</h2>
+
+        <div style="background:#fff3f3;border:1px solid #ffcdd2;border-radius:8px;padding:16px;margin-bottom:16px">
+          <p style="margin:0 0 6px"><strong>Захиалгын ID:</strong> ${displayId}</p>
+          <p style="margin:0 0 6px"><strong>Нийт дүн:</strong> ${Number(displayAmt).toLocaleString()} MNT</p>
+          <p style="margin:0"><strong>Төлбөр:</strong> <span style="color:#2e7d32;font-weight:bold">✅ ТӨЛӨГДСӨН (QPay)</span></p>
+        </div>
+
         ${renderItems()}
-        <hr style="border:0;border-top:1px solid #eee;margin:16px 0"/>
-        <h3 style="margin:0 0 8px">Хэрэглэгчийн мэдээлэл</h3>
-        <p style="margin:0"><strong>Нэр:</strong> ${fullName}</p>
-        <p style="margin:0"><strong>Утас:</strong> ${phone || ''}</p>
-        <p style="margin:0"><strong>И-мэйл:</strong> ${email || ''}</p>
-        <p style="margin:0"><strong>Хаяг:</strong> ${city || ''}, ${address || ''}</p>
-      </div>
-    `;
 
+        <hr style="border:0;border-top:1px solid #eee;margin:20px 0"/>
+
+        <h3 style="margin:0 0 12px">👤 Хэрэглэгчийн мэдээлэл</h3>
+        <table style="width:100%;border-collapse:collapse">
+          <tr><td style="padding:6px 0;color:#666;width:100px">Нэр</td><td style="padding:6px 0"><strong>${fullName}</strong></td></tr>
+          <tr><td style="padding:6px 0;color:#666">Утас</td><td style="padding:6px 0">${phone || '—'}</td></tr>
+          <tr><td style="padding:6px 0;color:#666">И-мэйл</td><td style="padding:6px 0">${email || '—'}</td></tr>
+          <tr><td style="padding:6px 0;color:#666">Хаяг</td><td style="padding:6px 0">${city || ''}${city && address ? ', ' : ''}${address || ''}</td></tr>
+        </table>
+      </div>`;
+
+    // ── ХЭРЭГЛЭГЧИЙН EMAIL ───────────────────────────────────────────────────
     const customerHtml = `
-      <div style="font-family: Inter, Arial, sans-serif; padding:20px; color:#111; max-width:600px; margin:auto;">
-        <div style="text-align:center;margin-bottom:16px">
-          <h2 style="margin:0 0 8px">Баярлалаа, ${first_name || 'Хэрэглэгч'}!</h2>
-          <p style="margin:0;color:#666">Таны захиалгыг хүлээн авлаа. Төлбөр QPay-ээс батлагдсан тохиолдолд бид захиалгыг боловсруулна.</p>
+      <div style="font-family:Arial,sans-serif;padding:24px;color:#111;max-width:600px;margin:auto">
+        <div style="text-align:center;margin-bottom:24px">
+          <h2 style="margin:0 0 8px">✅ Баярлалаа, ${first_name || 'та'}!</h2>
+          <p style="margin:0;color:#555">Таны захиалга амжилттай хүлээн авагдлаа.</p>
         </div>
 
-        <div style="background:#fafafa;padding:12px;border-radius:8px">
-          <p style="margin:0 0 8px"><strong>Захиалгын ID:</strong> ${orderId || invoice_id || ''}</p>
-          <p style="margin:0 0 8px"><strong>Төлөх дүн:</strong> ${amount ?? paid_amount ?? ''} MNT</p>
-          ${renderItems()}
+        <div style="background:#f9f9f9;border-radius:8px;padding:16px;margin-bottom:16px">
+          <p style="margin:0 0 6px"><strong>Захиалгын ID:</strong> ${displayId}</p>
+          <p style="margin:0 0 6px"><strong>Нийт дүн:</strong> ${Number(displayAmt).toLocaleString()} MNT</p>
+          <p style="margin:0"><strong>Хүргэлтийн хаяг:</strong> ${city || ''}${city && address ? ', ' : ''}${address || ''}</p>
         </div>
 
-        ${qpay_short_url ? `<div style="text-align:center;margin-top:16px"><a href="${qpay_short_url}" style="background:#1565C0;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;display:inline-block">QPay төлбөр руу очих</a></div>` : ''}
+        ${renderItems()}
 
-        <p style="font-size:12px;color:#888;margin-top:18px;">Хэрэв асуулт байвал бидэнтэй холбогдоно уу.</p>
-      </div>
-    `;
+        <p style="margin-top:20px;color:#555">
+          Захиалгын мэдээлэл болон хүргэлтийн хугацааг бид тантай холбогдож мэдэгдэх болно.
+        </p>
 
-    const mails: Promise<any>[] = [];
-    mails.push(
-      this.mailerService.sendMail({
-        to: 'driftub@gmail.com',
-        subject: `🚨 Шинэ захиалга - ${orderId || invoice_id || ''}`,
-        html: adminHtml,
-      }),
+        <p style="font-size:12px;color:#999;margin-top:24px;border-top:1px solid #eee;padding-top:12px">
+          Асуулт байвал <a href="mailto:driftub@gmail.com" style="color:#1565C0">driftub@gmail.com</a>-д хандана уу.
+        </p>
+      </div>`;
+
+    const tasks: Promise<any>[] = [];
+
+    // Үргэлж admin руу илгээнэ
+    tasks.push(
+      this.mailerService
+        .sendMail({
+          to:      'driftub@gmail.com',
+          subject: `🚨 Шинэ захиалга — ${displayId}`,
+          html:    adminHtml,
+        })
+        .then(() => this.logger.log(`Admin email илгээлээ: ${displayId}`))
+        .catch((err) => this.logger.error('Admin email алдаа:', err?.message)),
     );
 
+    // Хэрэглэгчийн email байвал илгээнэ
     if (email) {
-      mails.push(
-        this.mailerService.sendMail({
-          to: email,
-          subject: `Drift.ub - захиалгын мэдээлэл (${orderId || invoice_id || ''})`,
-          html: customerHtml,
-        }),
+      tasks.push(
+        this.mailerService
+          .sendMail({
+            to:      email,
+            subject: `Drift.ub — захиалга хүлээн авлаа (${displayId})`,
+            html:    customerHtml,
+          })
+          .then(() => this.logger.log(`Хэрэглэгчийн email илгээлээ: ${email}`))
+          .catch((err) => this.logger.error(`Хэрэглэгчийн email алдаа (${email}):`, err?.message)),
       );
+    } else {
+      this.logger.warn(`Хэрэглэгчийн email байхгүй — зөвхөн admin руу илгээлээ (${displayId})`);
     }
 
-    await Promise.all(mails);
+    await Promise.all(tasks);
   }
 }
