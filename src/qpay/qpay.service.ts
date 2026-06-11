@@ -150,33 +150,28 @@ export class QpayService {
   }
 
   // ─── 2. Checkout боловсруулах ─────────────────────────────────────────────
-  // checkoutDto дотор хэрэглэгчийн бүх мэдээлэл (email, нэр, хаяг гэх мэт)
-  // metadata болгон хадгалагдана — callback ирэхэд email илгээхэд ашиглана
 
   async processCheckout(checkoutDto: any) {
-    const callbackUrl = checkoutDto.callbackUrl || 'https://pay.driftub.store/api/qpay/callback';
+    const callbackUrl = checkoutDto.callbackUrl || 'https://pay.driftub.store/qpay/callback';
 
-    // Хэрэглэгчийн мэдээллийг metadata болгон бэлдэнэ
     const customerMeta = {
-      email:          checkoutDto.email          || '',
-      first_name:     checkoutDto.first_name     || checkoutDto.firstName     || '',
-      last_name:      checkoutDto.last_name      || checkoutDto.lastName      || '',
-      phone:          checkoutDto.phone          || '',
-      address:        checkoutDto.address        || '',
-      city:           checkoutDto.city           || '',
+      email:           checkoutDto.email           || '',
+      first_name:      checkoutDto.first_name      || checkoutDto.firstName  || '',
+      last_name:       checkoutDto.last_name       || checkoutDto.lastName   || '',
+      phone:           checkoutDto.phone           || '',
+      address:         checkoutDto.address         || '',
+      city:            checkoutDto.city            || '',
       product_details: checkoutDto.product_details || checkoutDto.productDetails || '',
-      items:          checkoutDto.items          || [],
+      items:           checkoutDto.items           || [],
     };
 
-    const qpayInvoice = await this.createInvoice(
+    return this.createInvoice(
       checkoutDto.orderId,
       checkoutDto.amount,
       callbackUrl,
       checkoutDto.description,
-      customerMeta, // ← metadata дамжуулна
+      customerMeta,
     );
-
-    return qpayInvoice;
   }
 
   // ─── 3. Invoice үүсгэх ────────────────────────────────────────────────────
@@ -186,7 +181,7 @@ export class QpayService {
     amount: any,
     callbackUrl: string,
     description?: string,
-    customerMeta?: Record<string, any>, // ← нэмэгдлээ
+    customerMeta?: Record<string, any>,
   ): Promise<QpayInvoiceResponse> {
     return this._createInvoiceWithRetry(orderId, amount, callbackUrl, description, false, customerMeta);
   }
@@ -204,7 +199,7 @@ export class QpayService {
 
     const cleanOrderId = String(orderId).trim().substring(0, 45);
     const cleanAmount  = Math.round(Number(amount));
-    const fallback     = `driftub:${cleanOrderId} ${cleanAmount}₮`;
+    const fallback     = `driftub:${cleanOrderId} ${cleanAmount}`;
 
     const safeDescription =
       description && description.length <= 240 ? description : fallback;
@@ -241,22 +236,25 @@ export class QpayService {
 
       this.logger.log(`Invoice амжилттай үүслээ: invoice_id=${data.invoice_id}`);
 
-      // customerMeta-г metadata болгон JSON хэлбэрээр хадгална
       const metadataStr = customerMeta
         ? JSON.stringify(customerMeta)
         : (description ?? fallback);
 
-      const payment = await this.upsertPayment({
-        orderId:     cleanOrderId,
-        invoiceId:   data.invoice_id,
-        amount:      cleanAmount,
+      // ЗАСВАР: status='PENDING' — PAID биш, зөвхөн callback-д л PAID болно
+      await this.upsertPayment({
+        orderId:      cleanOrderId,
+        invoiceId:    data.invoice_id,
+        amount:       cleanAmount,
         qpayShortUrl: data.qPay_shortUrl,
-        status:      'PENDING',
-        paid:        false,
-        metadata:    metadataStr,
+        status:       'PENDING',
+        paid:         false,
+        metadata:     metadataStr,
       });
 
-      await this.logRequest(payment, 'CREATE_INVOICE', body, data, 'Invoice үүсгэх хүсэлт');
+      await this.logRequest(
+        await this.paymentRepo.findOneOrFail({ invoiceId: data.invoice_id }),
+        'CREATE_INVOICE', body, data, 'Invoice үүсгэх хүсэлт',
+      );
       return data;
     } catch (error) {
       const err = error as any;
@@ -278,6 +276,8 @@ export class QpayService {
   }
 
   // ─── 4. Төлбөр шалгах ────────────────────────────────────────────────────
+  // ЗАСВАР: status шинэчлэхгүй — зөвхөн paid/paidAmount хадгална
+  // Status-г зөвхөн registerCallback-д л PAID болгоно
 
   async checkPayment(
     invoiceId: string,
@@ -305,24 +305,25 @@ export class QpayService {
         ),
       );
 
-      const paid = data.count > 0 && data.rows.some((r) => r.payment_status === 'PAID');
+      const isPaid = data.count > 0 && data.rows.some((r) => r.payment_status === 'PAID');
 
       const existing = await this.paymentRepo.findOne({ invoiceId });
-      const payment  = await this.upsertPayment({
-        orderId:     existing?.orderId,
+
+      // ЗАСВАР: status огт шинэчлэхгүй — email давхардахаас сэргийлнэ
+      await this.upsertPayment({
+        orderId:      existing?.orderId,
         invoiceId,
-        amount:      existing?.amount,
+        amount:       existing?.amount,
         qpayShortUrl: existing?.qpayShortUrl,
-        status:      paid ? 'PAID' : 'PENDING',
-        paid,
-        paidAmount:  data.paid_amount,
-        paymentId:   existing?.paymentId,
-        paidAt:      paid ? new Date() : existing?.paidAt,
+        paid:         isPaid,
+        paidAmount:   data.paid_amount,
+        paymentId:    existing?.paymentId,
+        paidAt:       isPaid ? new Date() : existing?.paidAt,
+        // status дамжуулахгүй → хуучин утга хэвээр үлдэнэ
       });
 
-      await this.logRequest(payment, 'CHECK_PAYMENT', { invoiceId }, data, 'Төлбөр шалгах хүсэлт');
-      this.logger.log(`Төлбөрийн төлөв: invoice_id=${invoiceId}, paid=${paid}`);
-      return { paid, data };
+      this.logger.log(`Төлбөрийн төлөв: invoice_id=${invoiceId}, paid=${isPaid}`);
+      return { paid: isPaid, data };
     } catch (error) {
       const err = error as any;
 
@@ -341,40 +342,37 @@ export class QpayService {
     }
   }
 
-  // ─── 5. Callback бүртгэх — төлбөр батлагдсан үед email илгээнэ ──────────
+  // ─── 5. Callback — төлбөр батлагдсан үед email илгээнэ ───────────────────
 
   async registerCallback(body: Record<string, any>): Promise<void> {
     const invoiceId = body.invoice_id || body.payment_id;
-    const result   = await this.checkPayment(invoiceId);
-    const existing = await this.paymentRepo.findOne({ invoiceId });
+    const result    = await this.checkPayment(invoiceId);
+    const existing  = await this.paymentRepo.findOne({ invoiceId });
 
     if (!existing) {
-      this.logger.error(`Callback ирсэн боловч датабаазаас бичлэг олдсонгүй: ${invoiceId}`);
+      this.logger.error(`Callback: датабаазаас бичлэг олдсонгүй: ${invoiceId}`);
       return;
     }
 
-    // Төлбөр шинээр төлөгдсөн үед л email илгээнэ (давхардахгүй)
-    if (result.paid && existing.status !== 'PAID') {
-      this.logger.log(`Төлбөр батлагдлаа: ${invoiceId} — Shopify + email боловсруулж байна...`);
+    // status 'PENDING' байх үед л email илгээнэ — давхардахгүй
+    if (result.paid && existing.status === 'PENDING') {
+      this.logger.log(`Төлбөр батлагдлаа: ${invoiceId} — email боловсруулж байна...`);
 
-      // Shopify захиалга үүсгэх
       await this.createShopifyOrder(existing);
 
-      // metadata-с хэрэглэгчийн мэдээлэл задлах
       let meta: Record<string, any> = {};
       try {
         meta = existing.metadata ? JSON.parse(existing.metadata) : {};
       } catch {
-        this.logger.warn('metadata JSON parse амжилтгүй, хоосон объект ашиглана');
+        this.logger.warn('metadata JSON parse амжилтгүй');
       }
 
       const customerEmail = meta.email || (body.email as string) || '';
 
       if (!customerEmail) {
-        this.logger.warn(`Invoice ${invoiceId}: хэрэглэгчийн email олдсонгүй — зөвхөн admin email илгээнэ`);
+        this.logger.warn(`Invoice ${invoiceId}: email олдсонгүй — зөвхөн admin руу илгээнэ`);
       }
 
-      // Email илгээх
       try {
         await this.emailService.sendOrderConfirmation({
           orderId:         existing.orderId,
@@ -394,11 +392,11 @@ export class QpayService {
 
         this.logger.log(`Email амжилттай илгээлээ: admin${customerEmail ? ' + ' + customerEmail : ''}`);
       } catch (err) {
-        this.logger.error('Email илгээхэд алдаа гарлаа (төлбөр хүчинтэй хэвээр):', err);
+        this.logger.error('Email илгээхэд алдаа (төлбөр хүчинтэй):', err);
       }
     }
 
-    // Төлбөрийн төлөв шинэчлэх
+    // Эцэст нь status-г PAID болгоно
     const payment = await this.upsertPayment({
       orderId:            existing.orderId,
       invoiceId,
@@ -412,7 +410,7 @@ export class QpayService {
       callbackReceivedAt: new Date(),
     });
 
-    await this.logRequest(payment, 'CALLBACK', body, result.data, 'QPay callback ирж бүртгэв');
+    await this.logRequest(payment, 'CALLBACK', body, result.data, 'QPay callback бүртгэв');
   }
 
   // ─── 6. Invoice цуцлах ────────────────────────────────────────────────────
@@ -455,7 +453,7 @@ export class QpayService {
     const accessToken = this.configService.get<string>('SHOPIFY_ACCESS_TOKEN');
 
     if (!storeDomain || !accessToken) {
-      this.logger.error('Shopify тохиргоо дутуу байна: Domain эсвэл Access Token олдсонгүй');
+      this.logger.error('Shopify тохиргоо дутуу байна');
       throw new InternalServerErrorException('Shopify тохиргооны алдаа');
     }
 
@@ -463,15 +461,13 @@ export class QpayService {
 
     const orderPayload = {
       order: {
-        note:             `QPay-ээр төлөгдсөн. Сагсны ID: ${payment.orderId}`,
+        note:             `QPay-ээр төлөгдсөн. Захиалгын ID: ${payment.orderId}`,
         financial_status: 'paid',
-        line_items: [
-          {
-            title:    'QPay Төлбөр',
-            price:    payment.amount,
-            quantity: 1,
-          },
-        ],
+        line_items: [{
+          title:    'QPay Төлбөр',
+          price:    payment.amount,
+          quantity: 1,
+        }],
       },
     };
 
@@ -497,7 +493,7 @@ export class QpayService {
       this.logger.log(`Shopify захиалга амжилттай үүслээ: ${data.order.id}`);
       return data;
     } catch (error) {
-      this.logger.error('Shopify дээр захиалга үүсгэхэд алдаа гарлаа', error);
+      this.logger.error('Shopify захиалга үүсгэхэд алдаа:', error);
       throw new InternalServerErrorException('Shopify захиалга үүсгэж чадсангүй');
     }
   }
