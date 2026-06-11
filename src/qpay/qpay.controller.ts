@@ -124,10 +124,9 @@ export class QpayController {
         address:         query.address         || 'Улаанбаатар',
         city:            query.city            || 'Улаанбаатар',
         phone:           query.phone           || '00000000',
-        // Засвар: Хэрэв Shopify-аас тусдаа product_details ирээгүй бол дээр үүсгэсэн жагсаалтыг тавина
         product_details: query.product_details || generatedDetails,
         callbackUrl,
-        items:           itemsArray, // Жагсаалтыг бүтнээр нь үлдээж service рүү дамжуулна
+        items:           itemsArray, 
       };
 
       if (query.items) {
@@ -245,7 +244,7 @@ export class QpayController {
       <div class="success-title">Төлбөр амжилттай!</div>
       <div class="success-desc">
         Захиалга баталгаажлаа.<br>
-        И-мэйл <b>${email}</b> хаяг руу илгээгдлээ.
+       Захиалгын мэдээлэл <b>${email}</b> хаяг руу илгээгдлээ.
       </div>
       <a href="https://www.driftub.store/" class="success-btn">Дэлгүүр рүү буцах</a>
     </div>

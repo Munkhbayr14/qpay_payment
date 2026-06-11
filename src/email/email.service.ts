@@ -28,14 +28,14 @@ export class EmailService {
     const displayId   = orderId || invoice_id || '';
     const displayAmt  = paid_amount ?? amount ?? '';
 
-    // Барааны жагсаалт HTML
+    // 🔥 ШИНЭЧИЛСЭН БАРААНЫ ЖАГСААЛТ (ЗУРАГТАЙ HTML ТЭМПЛЭЙТ)
     const renderItems = (): string => {
       if (Array.isArray(items) && items.length > 0) {
         return `
           <table style="width:100%;border-collapse:collapse;margin-top:12px">
             <thead>
               <tr style="background:#f5f5f5">
-                <th style="text-align:left;padding:8px;border-bottom:1px solid #eee">Бараа</th>
+                <th style="text-align:left;padding:8px;border-bottom:1px solid #eee" colspan="2">Бараа</th>
                 <th style="text-align:right;padding:8px;border-bottom:1px solid #eee">Үнэ</th>
                 <th style="text-align:center;padding:8px;border-bottom:1px solid #eee">Тоо</th>
               </tr>
@@ -43,12 +43,33 @@ export class EmailService {
             <tbody>
               ${items
                 .map(
-                  (it: any) => `
+                  (it: any) => {
+                    // Зургийн линк байгаа эсэхийг шалгана
+                    const imgUrl = it.image || '';
+                    const imgTd = imgUrl 
+                      ? `<td style="padding:8px;border-bottom:1px solid #f6f6f6;width:60px;vertical-align:middle">
+                           <img src="${imgUrl}" alt="${it.title || ''}" style="width:50px;height:50px;object-fit:cover;border-radius:4px;border:1px solid #eee;display:block"/>
+                         </td>`
+                      : `<td style="padding:8px;border-bottom:1px solid #f6f6f6;width:1px"></td>`; // Зураггүй бол зай эзлэхгүй
+
+                    // Хэрэв сагснаас урсгалаар variant_title ирсэн бол нэрэн дээр нь залгаж харуулна
+                    const itemTitle = it.title || it.name || '';
+                    const variantSuffix = it.variant_title ? ` - <span style="color:#666;font-size:13px">${it.variant_title}</span>` : '';
+
+                    return `
                 <tr>
-                  <td style="padding:8px;border-bottom:1px solid #f6f6f6">${it.title || it.name || ''}</td>
-                  <td style="padding:8px;text-align:right;border-bottom:1px solid #f6f6f6">${Number(it.price ?? 0).toLocaleString()} MNT</td>
-                  <td style="padding:8px;text-align:center;border-bottom:1px solid #f6f6f6">${it.quantity ?? 1}</td>
-                </tr>`,
+                  ${imgTd}
+                  <td style="padding:8px;border-bottom:1px solid #f6f6f6;vertical-align:middle">
+                    <span style="font-weight:500">${itemTitle}</span>${variantSuffix}
+                  </td>
+                  <td style="padding:8px;text-align:right;border-bottom:1px solid #f6f6f6;vertical-align:middle">
+                    ${Number(it.price ?? 0).toLocaleString()} MNT
+                  </td>
+                  <td style="padding:8px;text-align:center;border-bottom:1px solid #f6f6f6;vertical-align:middle">
+                    ${it.quantity ?? 1}
+                  </td>
+                </tr>`;
+                  }
                 )
                 .join('')}
             </tbody>
@@ -87,7 +108,7 @@ export class EmailService {
       <div style="font-family:Arial,sans-serif;padding:24px;color:#111;max-width:600px;margin:auto">
         <div style="text-align:center;margin-bottom:24px">
           <h2 style="margin:0 0 8px">✅ Баярлалаа, ${first_name || 'та'}!</h2>
-          <p style="margin:0;color:#555">Таны захиалга амжилттай хүлээн авагдлаа.</p>
+          <p style="margin:0;color:#555">Таны захиалга амжилттай баталгаажлаа.</p>
         </div>
 
         <div style="background:#f9f9f9;border-radius:8px;padding:16px;margin-bottom:16px">
@@ -99,7 +120,7 @@ export class EmailService {
         ${renderItems()}
 
         <p style="margin-top:20px;color:#555">
-          Захиалгын мэдээлэл болон хүргэлтийн хугацааг бид тантай холбогдож мэдэгдэх болно.
+         Таны хүргэлт танд 24-36 цаг хооронд хүргэгдэнэ.
         </p>
 
         <p style="font-size:12px;color:#999;margin-top:24px;border-top:1px solid #eee;padding-top:12px">
@@ -109,7 +130,6 @@ export class EmailService {
 
     const tasks: Promise<any>[] = [];
 
-    // Үргэлж admin руу илгээнэ
     tasks.push(
       this.mailerService
         .sendMail({
@@ -121,7 +141,6 @@ export class EmailService {
         .catch((err) => this.logger.error('Admin email алдаа:', err?.message)),
     );
 
-    // Хэрэглэгчийн email байвал илгээнэ
     if (email) {
       tasks.push(
         this.mailerService
