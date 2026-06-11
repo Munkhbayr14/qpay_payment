@@ -247,7 +247,7 @@ export class QpayController {
         Захиалга баталгаажлаа.<br>
         И-мэйл <b>${email}</b> хаяг руу илгээгдлээ.
       </div>
-      <a href="https://driftub.mn" class="success-btn">Дэлгүүр рүү буцах</a>
+      <a href="https://www.driftub.store/" class="success-btn">Дэлгүүр рүү буцах</a>
     </div>
 
     <div class="card-header">
