@@ -15,38 +15,34 @@ import {
 import type { Response } from 'express';
 import { QpayService } from './qpay.service';
 
-// ─── Request DTOs ─────────────────────────────────────────────────────────────
-
 class CreateInvoiceRequest {
   orderId!: string;
   amount!: number;
   callbackUrl!: string;
 }
 
-// ─── Controller ───────────────────────────────────────────────────────────────
-
 @Controller('qpay')
 export class QpayController {
   private readonly logger = new Logger(QpayController.name);
   private readonly baseUrl = process.env.BASE_URL;
 
+  private getSecureBaseUrl(): string {
+    const url = this.baseUrl || 'https://pay.driftub.store';
+    return url.startsWith('http://') ? url.replace('http://', 'https://') : url;
+  }
+
   constructor(private readonly qpayService: QpayService) {}
 
-  /**
-   * Invoice үүсгэх
-   * POST /qpay/invoice
-   */
   @Post('invoice')
   @HttpCode(HttpStatus.CREATED)
   async createInvoice(@Body() body: CreateInvoiceRequest, @Query('cart_token') cartToken: string) {
     this.logger.log(`Ирсэн body мэдээлэл: ${JSON.stringify(body)}`);
     const { amount, callbackUrl } = body;
     if (!cartToken) {
-       throw new BadRequestException('Cart token шаардлагатай!');
+      throw new BadRequestException('Cart token шаардлагатай!');
     }
     const pureToken = cartToken.split('?')[0];
     const invoice = await this.qpayService.createInvoice(pureToken, amount, callbackUrl);
-
     return {
       success: true,
       invoice_id: invoice.invoice_id,
@@ -57,54 +53,31 @@ export class QpayController {
     };
   }
 
-  /**
-   * Төлбөр шалгах
-   * GET /qpay/check/:invoiceId
-   */
   @Get('check/:invoiceId')
   async checkPayment(@Param('invoiceId') invoiceId: string) {
     const result = await this.qpayService.checkPayment(invoiceId);
-    return {
-      success: true,
-      paid: result.paid,
-    };
+    return { success: true, paid: result.paid };
   }
 
-  /**
-   * QPay callback
-   * POST /qpay/callback
-   */
   @Post('callback')
   @HttpCode(HttpStatus.OK)
   async handleCallback(@Body() body: Record<string, any>) {
     this.logger.log(`QPay callback ирлээ: ${JSON.stringify(body)}`);
-
     const invoiceId = body.invoice_id || body.payment_id;
-
     if (!invoiceId) {
       this.logger.error('Callback дата дотроос invoice_id эсвэл payment_id олдсонгүй');
       return { received: false };
     }
-
     await this.qpayService.registerCallback(body);
-
     return { received: true };
   }
 
-  /**
-   * Invoice цуцлах
-   * DELETE /qpay/invoice/:invoiceId
-   */
   @Delete('invoice/:invoiceId')
   async cancelInvoice(@Param('invoiceId') invoiceId: string) {
     await this.qpayService.cancelInvoice(invoiceId);
     return { success: true, message: 'Invoice цуцлагдлаа' };
   }
 
-  /**
-   * Shopify-оос redirect орж ирэх үндсэн хуудас
-   * GET /qpay/checkout
-   */
   @Get('checkout')
   async handleCheckout(
     @Query() query: Record<string, any>,
@@ -114,27 +87,25 @@ export class QpayController {
       this.logger.log(`Shopify query орж ирлээ: ${JSON.stringify(query)}`);
 
       const orderId = query.order_id || query.id || query.checkout_id || 'TEST_ORDER_id';
-      const amount = query.amount || query.total_price || 100;
-
-      this.logger.log(`ID: ${orderId}, Дүн: ${amount}`);
+      const amount  = query.amount || query.total_price || 100;
 
       const email = query.email;
       if (!email) {
         throw new BadRequestException('Email шаардлагатай!');
       }
 
-      const callbackUrl = `${this.baseUrl}/qpay/callback?order_id=${orderId}`;
+      const secureUrl  = this.getSecureBaseUrl();
+      const callbackUrl = `${secureUrl}/qpay/callback`;
 
-      // ─── ЗАСВАР: И-мэйл явуулах дата бэлдэц үүсгэх ──────────────────────────────
-      const checkoutDto: any = {
+      const checkoutDto: Record<string, any> = {
         orderId,
-        amount: Number(amount),
+        amount:          Number(amount),
         email,
-        first_name: query.first_name || 'Үйлчлүүлэгч',
-        last_name: query.last_name || '',
-        address: query.address || 'Улаанбаатар',
-        city: query.city || 'Улаанбаатар',
-        phone: query.phone || '00000000',
+        first_name:      query.first_name     || 'Үйлчлүүлэгч',
+        last_name:       query.last_name       || '',
+        address:         query.address         || 'Улаанбаатар',
+        city:            query.city            || 'Улаанбаатар',
+        phone:           query.phone           || '00000000',
         product_details: query.product_details || 'Drift.ub Захиалга',
         callbackUrl,
       };
@@ -145,48 +116,39 @@ export class QpayController {
             ? JSON.parse(query.items)
             : query.items;
         } catch {
-          this.logger.warn('checkout query дахь items JSON файлыг задлахад алдаа гарлаа');
+          this.logger.warn('items JSON задлахад алдаа гарлаа');
         }
       }
 
-      // ─── ЗАСВАР: Хэрэглэгчийн дата-г description болгон нууж QPay нэхэмжлэх үүсгэнэ
       const qpayResponse = await this.qpayService.createInvoice(
         orderId,
         Number(amount),
         callbackUrl,
-        JSON.stringify(checkoutDto),
+        `Drift.ub Захиалга #${orderId}`, // 4-р: QPay-д харагдах богино тайлбар
+        checkoutDto,                      // 5-р: объект → metadata → email илгээнэ ✅
       );
 
-      const invoiceId = qpayResponse.invoice_id;
-      const qrImage = qpayResponse.qr_image || '';
+      const invoiceId       = qpayResponse.invoice_id;
+      const qrImage         = qpayResponse.qr_image || '';
       const bankUrls: any[] = qpayResponse.urls || [];
 
-      // QPay-с ирсэн банкны жагсаалтыг HTML болгох
       let bankButtonsHtml = '';
       if (bankUrls.length === 0) {
-        bankButtonsHtml = `<p style="color:#D84315;font-size:14px;text-align:center;padding:1rem 0;">
-          Төлбөрийн линк олдсонгүй. Түр дараа дахин оролдоно уу.
-        </p>`;
+        bankButtonsHtml = `<p style="color:#D84315;font-size:14px;text-align:center;padding:1rem 0;">Төлбөрийн линк олдсонгүй.</p>`;
       } else {
         bankUrls.forEach((bank: any) => {
-          const name = bank.description || bank.name || 'Банк';
-          const logo = bank.logo || '';
-          const link = bank.link || '#';
+          const name     = bank.description || bank.name || 'Банк';
+          const logo     = bank.logo || '';
+          const link     = bank.link || '#';
           const initials = name.substring(0, 2).toUpperCase();
-
           bankButtonsHtml += `
-            <a href="${link}" class="bank-btn">
+            <a href="${link}" class="bank-btn" target="_blank" rel="noopener noreferrer">
               ${logo
-                ? `<img src="${logo}"
-                       alt="${name}"
-                       class="bank-logo"
-                       onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-                   <div class="bank-logo-fallback" style="display:none">${initials}</div>`
+                ? `<img src="${logo}" alt="${name}" class="bank-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="bank-logo-fallback" style="display:none">${initials}</div>`
                 : `<div class="bank-logo-fallback">${initials}</div>`
               }
               <span class="bank-name">${name}</span>
-            </a>
-          `;
+            </a>`;
         });
       }
 
@@ -198,227 +160,75 @@ export class QpayController {
   <title>QPay Төлбөр</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #f4f6f8;
-      min-height: 100vh;
-      display: flex;
-      justify-content: center;
-      align-items: flex-start;
-      padding: 24px 16px;
-    }
-
-    .card {
-      background: #ffffff;
-      border-radius: 16px;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-      width: 100%;
-      max-width: 480px;
-      overflow: hidden;
-    }
-
-    /* ── Header ── */
-    .card-header {
-      padding: 20px 20px 16px;
-      border-bottom: 1px solid #f0f0f0;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-    .header-logo {
-      width: 44px;
-      height: 44px;
-      border-radius: 10px;
-      background: #1565C0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-    }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f4f6f8; display: flex; justify-content: center; padding: 24px 16px; }
+    .card { background: #fff; border-radius: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); width: 100%; max-width: 480px; overflow: hidden; position: relative; }
+    .card-header { padding: 20px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; gap: 12px; }
+    .header-logo { width: 44px; height: 44px; border-radius: 10px; background: #1565C0; display: flex; align-items: center; justify-content: center; }
     .header-logo svg { width: 26px; height: 26px; fill: white; }
     .header-info { flex: 1; min-width: 0; }
     .header-title { font-size: 16px; font-weight: 600; color: #202223; }
     .header-order { font-size: 13px; color: #6d7175; margin-top: 2px; }
-    .header-amount {
-      font-size: 20px;
-      font-weight: 700;
-      color: #008060;
-      white-space: nowrap;
-    }
-
-    /* ── Tabs ── */
-    .tabs {
-      display: flex;
-      gap: 0;
-      padding: 16px 20px 0;
-    }
-    .tab-btn {
-      flex: 1;
-      padding: 10px 8px;
-      border: none;
-      background: transparent;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      color: #6d7175;
-      border-bottom: 2px solid transparent;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      transition: color 0.15s, border-color 0.15s;
-    }
-    .tab-btn.active {
-      color: #1565C0;
-      border-bottom-color: #1565C0;
-    }
-    .tab-btn svg { width: 18px; height: 18px; }
-
-    /* ── Bank grid ── */
+    .header-amount { font-size: 20px; font-weight: 700; color: #008060; white-space: nowrap; }
     .bank-section { padding: 16px 20px 20px; }
-    .bank-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-      gap: 10px;
-    }
-
-    @media (max-width: 360px) {
-      .bank-grid { grid-template-columns: repeat(2, 1fr); }
-    }
-
-    .bank-btn {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 12px;
-      border: 1px solid #e8e8e8;
-      border-radius: 10px;
-      background: #fafafa;
-      text-decoration: none;
-      color: #202223;
-      font-size: 13px;
-      font-weight: 500;
-      transition: background 0.15s, border-color 0.15s, transform 0.1s;
-      cursor: pointer;
-      overflow: hidden;
-    }
-    .bank-btn:hover {
-      background: #f0f4ff;
-      border-color: #1565C0;
-      transform: translateY(-1px);
-    }
-    .bank-btn:active { transform: translateY(0); }
-
-    .bank-logo {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      object-fit: contain;
-      flex-shrink: 0;
-      background: #fff;
-    }
-    .bank-logo-fallback {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      background: #1565C0;
-      color: white;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 11px;
-      font-weight: 600;
-      flex-shrink: 0;
-    }
-    .bank-name {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    /* ── QR section ── */
-    .qr-section {
-      padding: 24px 20px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 16px;
-    }
-    .qr-img-wrap {
-      width: 200px;
-      height: 200px;
-      border: 1px solid #e8e8e8;
-      border-radius: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #fff;
-      overflow: hidden;
-    }
-    .qr-img-wrap img {
-      width: 180px;
-      height: 180px;
-      object-fit: contain;
-    }
-    .qr-hint {
-      font-size: 13px;
-      color: #6d7175;
-      text-align: center;
-      line-height: 1.5;
-      max-width: 280px;
-    }
-
-    /* ── Desktop: QR байнга харагдах ── */
+    .bank-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+    .bank-btn { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #e8e8e8; border-radius: 10px; background: #fafafa; text-decoration: none; color: #202223; font-size: 13px; font-weight: 500; overflow: hidden; transition: background 0.15s, border-color 0.15s; }
+    .bank-btn:hover { background: #f0f4ff; border-color: #1565C0; }
+    .bank-logo { width: 32px; height: 32px; border-radius: 8px; object-fit: contain; }
+    .bank-logo-fallback { width: 32px; height: 32px; border-radius: 8px; background: #1565C0; color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+    .bank-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .qr-section { padding: 24px 20px; display: flex; flex-direction: column; align-items: center; gap: 16px; }
+    .qr-img-wrap { width: 200px; height: 200px; border: 1px solid #e8e8e8; border-radius: 12px; display: flex; align-items: center; justify-content: center; background: #fff; }
+    .qr-img-wrap img { width: 180px; height: 180px; }
+    .qr-hint { font-size: 13px; color: #6d7175; text-align: center; }
     @media (min-width: 600px) {
       .card { max-width: 560px; }
-      .desktop-layout {
-        display: grid;
-        grid-template-columns: 1fr 220px;
-        gap: 0;
-      }
-      .desktop-layout .bank-section {
-        border-right: 1px solid #f0f0f0;
-      }
-      .desktop-layout .qr-section {
-        padding: 20px 16px;
-        justify-content: center;
-      }
-      .tabs { display: none; }
-      .mobile-only { display: none; }
+      .desktop-layout { display: grid; grid-template-columns: 1fr 220px; }
+      .desktop-layout .bank-section { border-right: 1px solid #f0f0f0; }
       .desktop-qr { display: flex !important; }
     }
-
-    @media (max-width: 599px) {
-      .desktop-qr { display: none; }
-    }
-
-    .hidden { display: none !important; }
-
-    /* ── Status ── */
-    .status-bar {
-      padding: 12px 20px;
-      border-top: 1px solid #f0f0f0;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      background: #fafafa;
-    }
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #EF9F27;
-      flex-shrink: 0;
-      animation: pulse 1.5s ease-in-out infinite;
-    }
+    @media (max-width: 599px) { .desktop-qr { display: none; } }
+    .status-bar { padding: 12px 20px; border-top: 1px solid #f0f0f0; display: flex; align-items: center; gap: 8px; background: #fafafa; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #EF9F27; animation: pulse 1.5s infinite; }
     .status-dot.paid { background: #008060; animation: none; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
     .status-text { font-size: 13px; color: #6d7175; }
+
+    /* ── Төлбөр амжилттай overlay ── */
+    .success-overlay {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      background: #fff; flex-direction: column; align-items: center;
+      justify-content: center; gap: 16px; z-index: 10; display: none;
+      padding: 32px;
+    }
+    .success-icon {
+      width: 72px; height: 72px; background: #e6f4ea; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .success-icon svg { width: 40px; height: 40px; fill: #137333; }
+    .success-title { font-size: 22px; font-weight: 700; color: #202124; }
+    .success-desc { font-size: 14px; color: #5f6368; text-align: center; line-height: 1.6; }
+    .success-btn {
+      margin-top: 8px; padding: 12px 28px; background: #111; color: #fff;
+      border: none; border-radius: 8px; font-size: 15px; font-weight: 600;
+      cursor: pointer; text-decoration: none; display: inline-block;
+    }
   </style>
 </head>
 <body>
   <div class="card">
+
+    <!-- Төлбөр амжилттай болоход гарах дэлгэц -->
+    <div class="success-overlay" id="success-screen">
+      <div class="success-icon">
+        <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+      </div>
+      <div class="success-title">Төлбөр амжилттай!</div>
+      <div class="success-desc">
+        Захиалга баталгаажлаа.<br>
+        И-мэйл <b>${email}</b> хаяг руу илгээгдлээ.
+      </div>
+      <a href="https://driftub.mn" class="success-btn">Дэлгүүр рүү буцах</a>
+    </div>
 
     <div class="card-header">
       <div class="header-logo">
@@ -426,95 +236,47 @@ export class QpayController {
       </div>
       <div class="header-info">
         <div class="header-title">DRIFT.UB</div>
-         <div class="header-order">Захиалга #${orderId}</div>
+        <div class="header-order">Захиалга #${orderId}</div>
       </div>
       <div class="header-amount">${Number(amount).toLocaleString('mn-MN')} ₮</div>
     </div>
 
-    <div class="tabs mobile-only">
-      <button class="tab-btn active" id="tab-app" onclick="switchTab('app')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
-        Банкны апп
-      </button>
-      <button class="tab-btn" id="tab-qr" onclick="switchTab('qr')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="4" height="4"/></svg>
-        QR код
-      </button>
-    </div>
-
     <div class="desktop-layout">
-
-      <div class="bank-section" id="section-app">
-        <div class="bank-grid">
-          ${bankButtonsHtml}
-        </div>
+      <div class="bank-section">
+        <div class="bank-grid">${bankButtonsHtml}</div>
       </div>
-
-      <div class="qr-section desktop-qr" id="section-qr">
+      <div class="qr-section desktop-qr">
         <div class="qr-img-wrap">
           ${qrImage
             ? `<img src="data:image/png;base64,${qrImage}" alt="QPay QR код">`
-            : `<svg width="140" height="140" viewBox="0 0 140 140" style="opacity:0.3">
-                <rect x="10" y="10" width="40" height="40" fill="none" stroke="#333" stroke-width="4"/>
-                <rect x="20" y="20" width="20" height="20" fill="#333"/>
-                <rect x="90" y="10" width="40" height="40" fill="none" stroke="#333" stroke-width="4"/>
-                <rect x="100" y="20" width="20" height="20" fill="#333"/>
-                <rect x="10" y="90" width="40" height="40" fill="none" stroke="#333" stroke-width="4"/>
-                <rect x="20" y="100" width="20" height="20" fill="#333"/>
-              </svg>`
+            : `<svg width="80" height="80" viewBox="0 0 24 24" style="opacity:0.2"><path fill="#333" d="M3 3h7v7H3zm1 1v5h5V4zm1 1h3v3H5zm8-2h7v7h-7zm1 1v5h5V4zm1 1h3v3h-3zM3 13h7v7H3zm1 1v5h5v-5zm1 1h3v3H5zm8 0h2v2h-2zm0 4h2v2h-2zm4-4h2v2h-2zm0 4h2v2h-2z"/></svg>`
           }
         </div>
-        <p class="qr-hint">Банкны аппаараа QR кодыг уншуулж төлнө үү</p>
+        <p class="qr-hint">Банкны аппаараа QR уншуулж төлнө үү</p>
       </div>
-
     </div>
 
     <div class="status-bar">
       <div class="status-dot" id="status-dot"></div>
       <span class="status-text" id="status-text">Төлбөрийн төлөв шалгаж байна...</span>
     </div>
-
   </div>
 
   <script>
     const invoiceId = "${invoiceId}";
-    const orderId = "${orderId}";
-    const baseUrl = "${this.baseUrl}";
+    const secureUrl = "${secureUrl}";
 
-    // Mobile tab switch
-    function switchTab(tab) {
-      const appSection = document.getElementById('section-app');
-      const qrSection = document.getElementById('section-qr');
-      const tabApp = document.getElementById('tab-app');
-      const tabQr = document.getElementById('tab-qr');
-
-      if (tab === 'app') {
-        appSection.classList.remove('hidden');
-        qrSection.classList.add('hidden');
-        tabApp.classList.add('active');
-        tabQr.classList.remove('active');
-      } else {
-        appSection.classList.add('hidden');
-        qrSection.classList.remove('hidden');
-        tabApp.classList.remove('active');
-        tabQr.classList.add('active');
-      }
-    }
-
-    // Төлбөрийн төлөв 3 секунд тутамд шалгана
     const interval = setInterval(async () => {
       try {
-        const response = await fetch(baseUrl + '/qpay/check/' + invoiceId);
-        const data = await response.json();
+        const res  = await fetch(secureUrl + '/qpay/check/' + invoiceId);
+        const data = await res.json();
 
         if (data.success && data.paid) {
           clearInterval(interval);
           document.getElementById('status-dot').classList.add('paid');
-          document.getElementById('status-text').innerText = 'Төлбөр амжилттай! Буцаж байна...';
-
-          setTimeout(() => {
-            window.location.href = 'https://driftub.mn/checkout/orders/' + orderId + '/thank_you';
-          }, 1500);
+          document.getElementById('status-text').innerText = 'Төлбөр амжилттай!';
+          // Redirect хийхгүй — overlay харуулна
+          document.getElementById('success-screen').style.display = 'flex';
         }
       } catch (err) {
         console.error('Шалгахад алдаа:', err);
@@ -536,8 +298,7 @@ export class QpayController {
             <h3 style="color:#D84315;">Төлбөрийн системд алдаа гарлаа</h3>
             <p style="color:#6d7175;margin-top:8px;">Түр хүлээгээд дахин оролдоно уу.</p>
           </div>
-        </body></html>
-      `);
+        </body></html>`);
     }
   }
 }
