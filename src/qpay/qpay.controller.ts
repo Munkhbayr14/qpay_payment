@@ -97,6 +97,24 @@ export class QpayController {
       const secureUrl  = this.getSecureBaseUrl();
       const callbackUrl = `${secureUrl}/qpay/callback`;
 
+      // ─── ШИНЭ ЗАСВАР: JSON ITEMS-ИЙГ УНШИЖ ӨНГӨ, СOНГOЛТЫГ ГАРГАЖ ИРЭХ ───
+      let itemsArray: any[] = [];
+      if (query.items) {
+        try {
+          itemsArray = typeof query.items === 'string' 
+            ? JSON.parse(query.items) 
+            : query.items;
+        } catch {
+          this.logger.warn('checkout query дахь items JSON задлахад алдаа гарлаа');
+        }
+      }
+
+      // Хэрэв items дотор бараа байвал "Барааны нэр - Өнгө (xТоо)" хэлбэрээр жагсаалт үүсгэнэ
+      // Жишээ нь: "desktop 1:64 Rc drift car - 911 white (x1)"
+      const generatedDetails = itemsArray.length > 0
+        ? itemsArray.map(item => `${item.title}${item.variant_title ? ' - ' + item.variant_title : ''} (x${item.quantity || 1})`).join(', ')
+        : 'Drift.ub Захиалга';
+
       const checkoutDto: Record<string, any> = {
         orderId,
         amount:          Number(amount),
@@ -106,8 +124,10 @@ export class QpayController {
         address:         query.address         || 'Улаанбаатар',
         city:            query.city            || 'Улаанбаатар',
         phone:           query.phone           || '00000000',
-        product_details: query.product_details || 'Drift.ub Захиалга',
+        // Засвар: Хэрэв Shopify-аас тусдаа product_details ирээгүй бол дээр үүсгэсэн жагсаалтыг тавина
+        product_details: query.product_details || generatedDetails,
         callbackUrl,
+        items:           itemsArray, // Жагсаалтыг бүтнээр нь үлдээж service рүү дамжуулна
       };
 
       if (query.items) {
