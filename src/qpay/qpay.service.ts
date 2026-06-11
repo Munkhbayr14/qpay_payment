@@ -279,6 +279,7 @@ export class QpayService {
   // ЗАСВАР: status шинэчлэхгүй — зөвхөн paid/paidAmount хадгална
   // Status-г зөвхөн registerCallback-д л PAID болгоно
 
+ // ─── 4. Төлбөр шалгах (Хөтөч болон Систем шалгах урсгал) ───────────────────
   async checkPayment(
     invoiceId: string,
     isRetry = false,
@@ -306,10 +307,56 @@ export class QpayService {
       );
 
       const isPaid = data.count > 0 && data.rows.some((r) => r.payment_status === 'PAID');
-
       const existing = await this.paymentRepo.findOne({ invoiceId });
 
-      // ЗАСВАР: status огт шинэчлэхгүй — email давхардахаас сэргийлнэ
+      // 🔥 ШИНЭ ЗАСВАР: Хэрэв төлбөр төлөгдсөн, гэвч баазад PENDING хэвээрээ байвал (И-мэйл яваагүй гэсэн үг)
+      if (isPaid && existing && existing.status === 'PENDING') {
+        this.logger.log(`Polling: Төлбөр орсон байна, И-мэйл болон Shopify урсгалыг эхлүүллээ...`);
+
+        // 1. Shopify захиалга үүсгэх
+        try {
+          await this.createShopifyOrder(existing);
+        } catch (shopErr) {
+          this.logger.error('Shopify захиалга үүсгэхэд алдаа гарлаа (Ажиллагааг зогсоохгүй):', shopErr);
+        }
+
+        // 2. И-мэйл рүү илгээх датаг бэлдэх
+        let meta: Record<string, any> = {};
+        try {
+          meta = existing.metadata ? JSON.parse(existing.metadata) : {};
+        } catch {
+          this.logger.warn('metadata JSON parse амжилтгүй');
+        }
+
+        const customerEmail = meta.email || '';
+
+        // 3. И-мэйл шидэх
+        try {
+          await this.emailService.sendOrderConfirmation({
+            orderId:         existing.orderId,
+            amount:          existing.amount,
+            email:           customerEmail || undefined,
+            first_name:      meta.first_name  || meta.firstName  || '',
+            last_name:       meta.last_name   || meta.lastName   || '',
+            address:         meta.address     || '',
+            city:            meta.city        || '',
+            phone:           meta.phone       || '',
+            product_details: meta.product_details || meta.productDetails || '',
+            items:           Array.isArray(meta.items) ? meta.items : [],
+            invoice_id:      existing.invoiceId,
+            qpay_short_url:  existing.qpayShortUrl,
+            paid_amount:     data.paid_amount ?? existing.amount,
+          });
+          this.logger.log(`Email амжилттай илгээлээ (Polling урсгал): ${customerEmail}`);
+        } catch (emailErr) {
+          this.logger.error('Email илгээхэд алдаа гарлаа:', emailErr);
+        }
+
+        // 4. Төлөвийг нь PAID болгож шинэчилнэ (Дараагийн шалгалтаар дахин и-мэйл явуулахгүй тулд)
+        existing.status = 'PAID';
+      }
+
+      // Төлөвийг баазад хадгалах
       await this.upsertPayment({
         orderId:      existing?.orderId,
         invoiceId,
@@ -319,7 +366,7 @@ export class QpayService {
         paidAmount:   data.paid_amount,
         paymentId:    existing?.paymentId,
         paidAt:       isPaid ? new Date() : existing?.paidAt,
-        // status дамжуулахгүй → хуучин утга хэвээр үлдэнэ
+        status:       isPaid ? 'PAID' : existing?.status || 'PENDING', // Статусыг энд давхар баталгаажуулна
       });
 
       this.logger.log(`Төлбөрийн төлөв: invoice_id=${invoiceId}, paid=${isPaid}`);
