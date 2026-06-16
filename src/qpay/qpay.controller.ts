@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { QpayService } from './qpay.service';
+import * as crypto from 'crypto'; // 🔥 HMAC-SHA256 гарын үсэг шалгахад хэрэгтэй
 
 class CreateInvoiceRequest {
   orderId!: string;
@@ -25,6 +26,9 @@ class CreateInvoiceRequest {
 export class QpayController {
   private readonly logger = new Logger(QpayController.name);
   private readonly baseUrl = process.env.BASE_URL;
+
+  // 🔥 Фронт талтай яг ижилхэн Нууц Түлхүүр (Secret Salt)
+  private readonly SECRET_SALT = 'DriftUB_Secure_Salt_2026_Key!';
 
   private getSecureBaseUrl(): string {
     const url = this.baseUrl || 'https://pay.driftub.store';
@@ -87,17 +91,33 @@ export class QpayController {
       this.logger.log(`Shopify query орж ирлээ: ${JSON.stringify(query)}`);
 
       const orderId = query.order_id || query.id || query.checkout_id || 'TEST_ORDER_id';
-      const amount  = query.amount || query.total_price || 100;
+      const amount  = query.amount || query.total_price || '0';
+      const phone   = query.phone || '00000000';
+      const sign    = query.sign;
 
       const email = query.email;
       if (!email) {
         throw new BadRequestException('Email шаардлагатай!');
       }
 
-      const secureUrl  = this.getSecureBaseUrl();
-      const callbackUrl = `${secureUrl}/qpay/callback`;
+      // ─── 🛡️ ХАМГААЛАЛТ 1: HMAC-SHA256 ДИЖИТАЛ ГАРЫН ҮСЭГ ШАЛГАХ ───
+      if (!sign) {
+        this.logger.error(`Халдлага илэрлээ: Гарын үсэг (sign) байхгүй байна. OrderId: ${orderId}`);
+        throw new BadRequestException('Төлбөрийн аюулгүй байдлын баталгаажуулалт амжилтгүй!');
+      }
 
-      // ─── ШИНЭ ЗАСВАР: JSON ITEMS-ИЙГ УНШИЖ ӨНГӨ, СOНГOЛТЫГ ГАРГАЖ ИРЭХ ───
+      const rawDataToVerify = orderId + '|' + amount + '|' + phone;
+      const expectedSignature = crypto
+        .createHmac('sha256', this.SECRET_SALT)
+        .update(rawDataToVerify)
+        .digest('hex');
+
+      if (sign !== expectedSignature) {
+        this.logger.error(`🚨 ХАЛДЛАГА: Гарын үсэг зөрлөө! Зассан дүн орж ирсэн байх магадлалтай. Ирсэн: ${sign}, Хүлээгдэж байсан: ${expectedSignature}`);
+        throw new BadRequestException('Уучлаарай, төлбөрийн дата хүчингүй байна! (Price Tampering Detected)');
+      }
+
+      // Items-ийг аюулгүй унших
       let itemsArray: any[] = [];
       if (query.items) {
         try {
@@ -109,8 +129,26 @@ export class QpayController {
         }
       }
 
+      // ─── 🛡️ ХАМГААЛАЛТ 2: БАРААНУУДЫН ҮНИЙГ СЕРВЕР ТАЛД ДАВХАР БОДОЖ ТУЛГАХ ───
+      let calculatedTotalPrice = 0;
+      if (itemsArray && itemsArray.length > 0) {
+        itemsArray.forEach((item: any) => {
+          const itemPrice = Number(item.price) || 0;
+          const itemQty = Number(item.quantity) || 1;
+          calculatedTotalPrice += (itemPrice * itemQty);
+        });
+
+        // Хэрэв бодсон дүн болон ирсэн amount зөрвөл ("Buy it now" sessionStorage халдлага)
+        if (Math.abs(calculatedTotalPrice - Number(amount)) > 1) {
+          this.logger.error(`🚨 ХАЛДЛАГА: Сагсны нийт дүн засагдсан байна! Бодсон: ${calculatedTotalPrice}, Ирсэн: ${amount}`);
+          throw new BadRequestException('Захиалгын үнийн бүтцэд өөрчлөлт орсон тул цуцлагдлаа.');
+        }
+      }
+
+      const secureUrl  = this.getSecureBaseUrl();
+      const callbackUrl = `${secureUrl}/qpay/callback`;
+
       // Хэрэв items дотор бараа байвал "Барааны нэр - Өнгө (xТоо)" хэлбэрээр жагсаалт үүсгэнэ
-      // Жишээ нь: "desktop 1:64 Rc drift car - 911 white (x1)"
       const generatedDetails = itemsArray.length > 0
         ? itemsArray.map(item => `${item.title}${item.variant_title ? ' - ' + item.variant_title : ''} (x${item.quantity || 1})`).join(', ')
         : 'Drift.ub Захиалга';
@@ -123,28 +161,19 @@ export class QpayController {
         last_name:       query.last_name       || '',
         address:         query.address         || 'Улаанбаатар',
         city:            query.city            || 'Улаанбаатар',
-        phone:           query.phone           || '00000000',
+        phone,
         product_details: query.product_details || generatedDetails,
         callbackUrl,
         items:           itemsArray, 
       };
 
-      if (query.items) {
-        try {
-          checkoutDto.items = typeof query.items === 'string'
-            ? JSON.parse(query.items)
-            : query.items;
-        } catch {
-          this.logger.warn('items JSON задлахад алдаа гарлаа');
-        }
-      }
-
+      // QPay рүү 100% баталгаажсан, шалгагдсан amount-ийг илгээнэ ✅
       const qpayResponse = await this.qpayService.createInvoice(
         orderId,
         Number(amount),
         callbackUrl,
-        `Drift.ub Захиалга #${orderId}`, // 4-р: QPay-д харагдах богино тайлбар
-        checkoutDto,                      // 5-р: объект → metadata → email илгээнэ ✅
+        `Drift.ub Захиалга #${orderId}`, 
+        checkoutDto,                      
       );
 
       const invoiceId       = qpayResponse.invoice_id;
@@ -212,7 +241,6 @@ export class QpayController {
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
     .status-text { font-size: 13px; color: #6d7175; }
 
-    /* ── Төлбөр амжилттай overlay ── */
     .success-overlay {
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       background: #fff; flex-direction: column; align-items: center;
@@ -235,8 +263,6 @@ export class QpayController {
 </head>
 <body>
   <div class="card">
-
-    <!-- Төлбөр амжилттай болоход гарах дэлгэц -->
     <div class="success-overlay" id="success-screen">
       <div class="success-icon">
         <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
@@ -294,7 +320,6 @@ export class QpayController {
           clearInterval(interval);
           document.getElementById('status-dot').classList.add('paid');
           document.getElementById('status-text').innerText = 'Төлбөр амжилттай!';
-          // Redirect хийхгүй — overlay харуулна
           document.getElementById('success-screen').style.display = 'flex';
         }
       } catch (err) {
@@ -315,7 +340,7 @@ export class QpayController {
         <html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f4f6f8;">
           <div style="text-align:center;padding:2rem;">
             <h3 style="color:#D84315;">Төлбөрийн системд алдаа гарлаа</h3>
-            <p style="color:#6d7175;margin-top:8px;">Түр хүлээгээд дахин оролдоно уу.</p>
+            <p style="color:#6d7175;margin-top:8px;">${message}</p>
           </div>
         </body></html>`);
     }
