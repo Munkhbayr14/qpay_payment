@@ -30,7 +30,7 @@ export class QpayService {
     @InjectRepository(QpayRequestLog)
     private readonly logRepo: EntityRepository<QpayRequestLog>,
     private readonly emailService: EmailService,
-  ) {}
+  ) { }
 
   private safeJson(value: any): string | undefined {
     try {
@@ -155,14 +155,14 @@ export class QpayService {
     const callbackUrl = checkoutDto.callbackUrl || 'https://pay.driftub.store/qpay/callback';
 
     const customerMeta = {
-      email:           checkoutDto.email           || '',
-      first_name:      checkoutDto.first_name      || checkoutDto.firstName  || '',
-      last_name:       checkoutDto.last_name       || checkoutDto.lastName   || '',
-      phone:           checkoutDto.phone           || '',
-      address:         checkoutDto.address         || '',
-      city:            checkoutDto.city            || '',
+      email: checkoutDto.email || '',
+      first_name: checkoutDto.first_name || checkoutDto.firstName || '',
+      last_name: checkoutDto.last_name || checkoutDto.lastName || '',
+      phone: checkoutDto.phone || '',
+      address: checkoutDto.address || '',
+      city: checkoutDto.city || '',
       product_details: checkoutDto.product_details || checkoutDto.productDetails || '',
-      items:           checkoutDto.items           || [],
+      items: checkoutDto.items || [],
     };
 
     return this.createInvoice(
@@ -198,8 +198,8 @@ export class QpayService {
     const invoiceCode = this.configService.get<string>('QPAY_INVOICE_CODE') || 'ORDER_INVOICE';
 
     const cleanOrderId = String(orderId).trim().substring(0, 45);
-    const cleanAmount  = Math.round(Number(amount));
-    const fallback     = `driftub:${cleanOrderId} ${cleanAmount}`;
+    const cleanAmount = Math.round(Number(amount));
+    const fallback = `driftub:${cleanOrderId} ${cleanAmount}`;
 
     const safeDescription =
       description && description.length <= 240 ? description : fallback;
@@ -209,13 +209,13 @@ export class QpayService {
     }
 
     const body: CreateInvoiceDto = {
-      invoice_code:          invoiceCode,
-      sender_invoice_no:     cleanOrderId,
+      invoice_code: invoiceCode,
+      sender_invoice_no: cleanOrderId,
       invoice_receiver_code: 'terminal',
-      invoice_description:   safeDescription,
-      sender_branch_code:    'ONLINE',
-      amount:                cleanAmount,
-      callback_url:          callbackUrl,
+      invoice_description: safeDescription,
+      sender_branch_code: 'ONLINE',
+      amount: cleanAmount,
+      callback_url: callbackUrl,
     };
 
     try {
@@ -242,13 +242,13 @@ export class QpayService {
 
       // ЗАСВАР: status='PENDING' — PAID биш, зөвхөн callback-д л PAID болно
       await this.upsertPayment({
-        orderId:      cleanOrderId,
-        invoiceId:    data.invoice_id,
-        amount:       cleanAmount,
+        orderId: cleanOrderId,
+        invoiceId: data.invoice_id,
+        amount: cleanAmount,
         qpayShortUrl: data.qPay_shortUrl,
-        status:       'PENDING',
-        paid:         false,
-        metadata:     metadataStr,
+        status: 'PENDING',
+        paid: false,
+        metadata: metadataStr,
       });
 
       await this.logRequest(
@@ -279,7 +279,7 @@ export class QpayService {
   // ЗАСВАР: status шинэчлэхгүй — зөвхөн paid/paidAmount хадгална
   // Status-г зөвхөн registerCallback-д л PAID болгоно
 
- // ─── 4. Төлбөр шалгах (Хөтөч болон Систем шалгах урсгал) ───────────────────
+  // ─── 4. Төлбөр шалгах ────────────────────────────────────────────────────
   async checkPayment(
     invoiceId: string,
     isRetry = false,
@@ -294,8 +294,8 @@ export class QpayService {
           `${this.payUrl}/payment/check`,
           {
             object_type: 'INVOICE',
-            object_id:   invoiceId,
-            offset:      { page_number: 1, page_limit: 100 },
+            object_id: invoiceId,
+            offset: { page_number: 1, page_limit: 100 },
           },
           {
             headers: {
@@ -309,64 +309,18 @@ export class QpayService {
       const isPaid = data.count > 0 && data.rows.some((r) => r.payment_status === 'PAID');
       const existing = await this.paymentRepo.findOne({ invoiceId });
 
-      // 🔥 ШИНЭ ЗАСВАР: Хэрэв төлбөр төлөгдсөн, гэвч баазад PENDING хэвээрээ байвал (И-мэйл яваагүй гэсэн үг)
-      if (isPaid && existing && existing.status === 'PENDING') {
-        this.logger.log(`Polling: Төлбөр орсон байна, И-мэйл болон Shopify урсгалыг эхлүүллээ...`);
-
-        // 1. Shopify захиалга үүсгэх
-        try {
-          await this.createShopifyOrder(existing);
-        } catch (shopErr) {
-          this.logger.error('Shopify захиалга үүсгэхэд алдаа гарлаа (Ажиллагааг зогсоохгүй):', shopErr);
-        }
-
-        // 2. И-мэйл рүү илгээх датаг бэлдэх
-        let meta: Record<string, any> = {};
-        try {
-          meta = existing.metadata ? JSON.parse(existing.metadata) : {};
-        } catch {
-          this.logger.warn('metadata JSON parse амжилтгүй');
-        }
-
-        const customerEmail = meta.email || '';
-
-        // 3. И-мэйл шидэх
-        try {
-          await this.emailService.sendOrderConfirmation({
-            orderId:         existing.orderId,
-            amount:          existing.amount,
-            email:           customerEmail || undefined,
-            first_name:      meta.first_name  || meta.firstName  || '',
-            last_name:       meta.last_name   || meta.lastName   || '',
-            address:         meta.address     || '',
-            city:            meta.city        || '',
-            phone:           meta.phone       || '',
-            product_details: meta.product_details || meta.productDetails || '',
-            items:           Array.isArray(meta.items) ? meta.items : [],
-            invoice_id:      existing.invoiceId,
-            qpay_short_url:  existing.qpayShortUrl,
-            paid_amount:     data.paid_amount ?? existing.amount,
-          });
-          this.logger.log(`Email амжилттай илгээлээ (Polling урсгал): ${customerEmail}`);
-        } catch (emailErr) {
-          this.logger.error('Email илгээхэд алдаа гарлаа:', emailErr);
-        }
-
-        // 4. Төлөвийг нь PAID болгож шинэчилнэ (Дараагийн шалгалтаар дахин и-мэйл явуулахгүй тулд)
-        existing.status = 'PAID';
-      }
-
-      // Төлөвийг баазад хадгалах
+      // Зөвхөн төлөв болон paid state хадгална — email/Shopify энд байхгүй
       await this.upsertPayment({
-        orderId:      existing?.orderId,
+        orderId: existing?.orderId,
         invoiceId,
-        amount:       existing?.amount,
+        amount: existing?.amount,
         qpayShortUrl: existing?.qpayShortUrl,
-        paid:         isPaid,
-        paidAmount:   data.paid_amount,
-        paymentId:    existing?.paymentId,
-        paidAt:       isPaid ? new Date() : existing?.paidAt,
-        status:       isPaid ? 'PAID' : existing?.status || 'PENDING', // Статусыг энд давхар баталгаажуулна
+        paid: isPaid,
+        paidAmount: data.paid_amount,
+        paymentId: existing?.paymentId,
+        paidAt: isPaid ? new Date() : existing?.paidAt,
+        // ⚠️ Status-г энд ӨӨРЧЛӨХГҮЙ — registerCallback л өөрчилнө
+        status: existing?.status || 'PENDING',
       });
 
       this.logger.log(`Төлбөрийн төлөв: invoice_id=${invoiceId}, paid=${isPaid}`);
@@ -393,20 +347,32 @@ export class QpayService {
 
   async registerCallback(body: Record<string, any>): Promise<void> {
     const invoiceId = body.invoice_id || body.payment_id;
-    const result    = await this.checkPayment(invoiceId);
-    const existing  = await this.paymentRepo.findOne({ invoiceId });
+
+    // 1. QPay-аас төлбөрийн мэдээлэл авах
+    const result = await this.checkPayment(invoiceId);
+
+    // 2. DB-аас ШИНЭЭР унших (checkPayment дараа)
+    const existing = await this.paymentRepo.findOne({ invoiceId });
 
     if (!existing) {
       this.logger.error(`Callback: датабаазаас бичлэг олдсонгүй: ${invoiceId}`);
       return;
     }
 
-    // status 'PENDING' байх үед л email илгээнэ — давхардахгүй
+    this.logger.log(`Callback: invoice=${invoiceId}, QPay paid=${result.paid}, DB status=${existing.status}`);
+
+    // 3. Төлбөр орсон + DB-д PENDING байвал л email явуулна
     if (result.paid && existing.status === 'PENDING') {
-      this.logger.log(`Төлбөр батлагдлаа: ${invoiceId} — email боловсруулж байна...`);
+      this.logger.log(`Төлбөр батлагдлаа: ${invoiceId} — Shopify + email боловсруулж байна...`);
 
-      await this.createShopifyOrder(existing);
+      // Shopify захиалга үүсгэх
+      try {
+        await this.createShopifyOrder(existing);
+      } catch (shopErr) {
+        this.logger.error('Shopify захиалга үүсгэхэд алдаа:', shopErr);
+      }
 
+      // Metadata задлах
       let meta: Record<string, any> = {};
       try {
         meta = existing.metadata ? JSON.parse(existing.metadata) : {};
@@ -420,40 +386,41 @@ export class QpayService {
         this.logger.warn(`Invoice ${invoiceId}: email олдсонгүй — зөвхөн admin руу илгээнэ`);
       }
 
+      // Email илгээх
       try {
         await this.emailService.sendOrderConfirmation({
-          orderId:         existing.orderId,
-          amount:          existing.amount,
-          email:           customerEmail || undefined,
-          first_name:      meta.first_name  || meta.firstName  || '',
-          last_name:       meta.last_name   || meta.lastName   || '',
-          address:         meta.address     || '',
-          city:            meta.city        || '',
-          phone:           meta.phone       || '',
+          orderId: existing.orderId,
+          amount: existing.amount,
+          email: customerEmail || undefined,
+          first_name: meta.first_name || meta.firstName || '',
+          last_name: meta.last_name || meta.lastName || '',
+          address: meta.address || '',
+          city: meta.city || '',
+          phone: meta.phone || '',
           product_details: meta.product_details || meta.productDetails || '',
-          items:           Array.isArray(meta.items) ? meta.items : [],
-          invoice_id:      existing.invoiceId,
-          qpay_short_url:  existing.qpayShortUrl,
-          paid_amount:     result.data?.paid_amount ?? existing.paidAmount,
+          items: Array.isArray(meta.items) ? meta.items : [],
+          invoice_id: existing.invoiceId,
+          qpay_short_url: existing.qpayShortUrl,
+          paid_amount: result.data?.paid_amount ?? existing.paidAmount,
         });
 
-        this.logger.log(`Email амжилттай илгээлээ: admin${customerEmail ? ' + ' + customerEmail : ''}`);
+        this.logger.log(`Email амжилттай илгээлээ: ${customerEmail || 'зөвхөн admin'}`);
       } catch (err) {
-        this.logger.error('Email илгээхэд алдаа (төлбөр хүчинтэй):', err);
+        this.logger.error('Email илгээхэд алдаа:', err);
       }
     }
 
-    // Эцэст нь status-г PAID болгоно
+    // 4. Эцэст нь status-г PAID болгон хадгална
     const payment = await this.upsertPayment({
-      orderId:            existing.orderId,
+      orderId: existing.orderId,
       invoiceId,
-      amount:             existing.amount,
-      qpayShortUrl:       existing.qpayShortUrl,
-      paymentId:          body.qpay_payment_id ?? body.payment_id ?? invoiceId,
-      status:             result.paid ? 'PAID' : 'UNPAID',
-      paid:               result.paid,
-      paidAmount:         result.data.paid_amount,
-      paidAt:             result.paid ? new Date() : existing.paidAt,
+      amount: existing.amount,
+      qpayShortUrl: existing.qpayShortUrl,
+      paymentId: body.qpay_payment_id ?? body.payment_id ?? invoiceId,
+      status: result.paid ? 'PAID' : 'UNPAID',
+      paid: result.paid,
+      paidAmount: result.data.paid_amount,
+      paidAt: result.paid ? new Date() : existing.paidAt,
       callbackReceivedAt: new Date(),
     });
 
@@ -475,11 +442,11 @@ export class QpayService {
       const existing = await this.paymentRepo.findOne({ invoiceId });
       if (existing) {
         const payment = await this.upsertPayment({
-          orderId:   existing.orderId,
+          orderId: existing.orderId,
           invoiceId,
-          amount:    existing.amount,
-          status:    'CANCELLED',
-          paid:      false,
+          amount: existing.amount,
+          status: 'CANCELLED',
+          paid: false,
           paymentId: existing.paymentId,
         });
         await this.logRequest(payment, 'CANCEL_INVOICE', { invoiceId }, null, 'Invoice цуцлах хүсэлт');
@@ -508,11 +475,11 @@ export class QpayService {
 
     const orderPayload = {
       order: {
-        note:             `QPay-ээр төлөгдсөн. Захиалгын ID: ${payment.orderId}`,
+        note: `QPay-ээр төлөгдсөн. Захиалгын ID: ${payment.orderId}`,
         financial_status: 'paid',
         line_items: [{
-          title:    'QPay Төлбөр',
-          price:    payment.amount,
+          title: 'QPay Төлбөр',
+          price: payment.amount,
           quantity: 1,
         }],
       },

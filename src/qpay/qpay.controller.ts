@@ -35,7 +35,7 @@ export class QpayController {
     return url.startsWith('http://') ? url.replace('http://', 'https://') : url;
   }
 
-  constructor(private readonly qpayService: QpayService) {}
+  constructor(private readonly qpayService: QpayService) { }
 
   @Post('invoice')
   @HttpCode(HttpStatus.CREATED)
@@ -91,9 +91,9 @@ export class QpayController {
       this.logger.log(`Shopify query орж ирлээ: ${JSON.stringify(query)}`);
 
       const orderId = query.order_id || query.id || query.checkout_id || 'TEST_ORDER_id';
-      const amount  = query.amount || query.total_price || '0';
-      const phone   = query.phone || '00000000';
-      const sign    = query.sign;
+      const amount = query.amount || query.total_price || '0';
+      const phone = query.phone || '00000000';
+      const sign = query.sign;
 
       const email = query.email;
       if (!email) {
@@ -106,7 +106,8 @@ export class QpayController {
         throw new BadRequestException('Төлбөрийн аюулгүй байдлын баталгаажуулалт амжилтгүй!');
       }
 
-      const rawDataToVerify = orderId + '|' + amount + '|' + phone;
+      const roundedAmount = String(Math.round(Number(amount)));
+      const rawDataToVerify = orderId + '|' + roundedAmount + '|' + phone;
       const expectedSignature = crypto
         .createHmac('sha256', this.SECRET_SALT)
         .update(rawDataToVerify)
@@ -121,8 +122,8 @@ export class QpayController {
       let itemsArray: any[] = [];
       if (query.items) {
         try {
-          itemsArray = typeof query.items === 'string' 
-            ? JSON.parse(query.items) 
+          itemsArray = typeof query.items === 'string'
+            ? JSON.parse(query.items)
             : query.items;
         } catch {
           this.logger.warn('checkout query дахь items JSON задлахад алдаа гарлаа');
@@ -145,7 +146,7 @@ export class QpayController {
         }
       }
 
-      const secureUrl  = this.getSecureBaseUrl();
+      const secureUrl = this.getSecureBaseUrl();
       const callbackUrl = `${secureUrl}/qpay/callback`;
 
       // Хэрэв items дотор бараа байвал "Барааны нэр - Өнгө (xТоо)" хэлбэрээр жагсаалт үүсгэнэ
@@ -155,16 +156,16 @@ export class QpayController {
 
       const checkoutDto: Record<string, any> = {
         orderId,
-        amount:          Number(amount),
+        amount: Number(amount),
         email,
-        first_name:      query.first_name     || 'Үйлчлүүлэгч',
-        last_name:       query.last_name       || '',
-        address:         query.address         || 'Улаанбаатар',
-        city:            query.city            || 'Улаанбаатар',
+        first_name: query.first_name || 'Үйлчлүүлэгч',
+        last_name: query.last_name || '',
+        address: query.address || 'Улаанбаатар',
+        city: query.city || 'Улаанбаатар',
         phone,
         product_details: query.product_details || generatedDetails,
         callbackUrl,
-        items:           itemsArray, 
+        items: itemsArray,
       };
 
       // QPay рүү 100% баталгаажсан, шалгагдсан amount-ийг илгээнэ ✅
@@ -172,12 +173,12 @@ export class QpayController {
         orderId,
         Number(amount),
         callbackUrl,
-        `Drift.ub Захиалга #${orderId}`, 
-        checkoutDto,                      
+        `Drift.ub Захиалга #${orderId}`,
+        checkoutDto,
       );
 
-      const invoiceId       = qpayResponse.invoice_id;
-      const qrImage         = qpayResponse.qr_image || '';
+      const invoiceId = qpayResponse.invoice_id;
+      const qrImage = qpayResponse.qr_image || '';
       const bankUrls: any[] = qpayResponse.urls || [];
 
       let bankButtonsHtml = '';
@@ -185,16 +186,16 @@ export class QpayController {
         bankButtonsHtml = `<p style="color:#D84315;font-size:14px;text-align:center;padding:1rem 0;">Төлбөрийн линк олдсонгүй.</p>`;
       } else {
         bankUrls.forEach((bank: any) => {
-          const name     = bank.description || bank.name || 'Банк';
-          const logo     = bank.logo || '';
-          const link     = bank.link || '#';
+          const name = bank.description || bank.name || 'Банк';
+          const logo = bank.logo || '';
+          const link = bank.link || '#';
           const initials = name.substring(0, 2).toUpperCase();
           bankButtonsHtml += `
             <a href="${link}" class="bank-btn" target="_blank" rel="noopener noreferrer">
               ${logo
-                ? `<img src="${logo}" alt="${name}" class="bank-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="bank-logo-fallback" style="display:none">${initials}</div>`
-                : `<div class="bank-logo-fallback">${initials}</div>`
-              }
+              ? `<img src="${logo}" alt="${name}" class="bank-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="bank-logo-fallback" style="display:none">${initials}</div>`
+              : `<div class="bank-logo-fallback">${initials}</div>`
+            }
               <span class="bank-name">${name}</span>
             </a>`;
         });
@@ -293,9 +294,9 @@ export class QpayController {
       <div class="qr-section desktop-qr">
         <div class="qr-img-wrap">
           ${qrImage
-            ? `<img src="data:image/png;base64,${qrImage}" alt="QPay QR код">`
-            : `<svg width="80" height="80" viewBox="0 0 24 24" style="opacity:0.2"><path fill="#333" d="M3 3h7v7H3zm1 1v5h5V4zm1 1h3v3H5zm8-2h7v7h-7zm1 1v5h5V4zm1 1h3v3h-3zM3 13h7v7H3zm1 1v5h5v-5zm1 1h3v3H5zm8 0h2v2h-2zm0 4h2v2h-2zm4-4h2v2h-2zm0 4h2v2h-2z"/></svg>`
-          }
+          ? `<img src="data:image/png;base64,${qrImage}" alt="QPay QR код">`
+          : `<svg width="80" height="80" viewBox="0 0 24 24" style="opacity:0.2"><path fill="#333" d="M3 3h7v7H3zm1 1v5h5V4zm1 1h3v3H5zm8-2h7v7h-7zm1 1v5h5V4zm1 1h3v3h-3zM3 13h7v7H3zm1 1v5h5v-5zm1 1h3v3H5zm8 0h2v2h-2zm0 4h2v2h-2zm4-4h2v2h-2zm0 4h2v2h-2z"/></svg>`
+        }
         </div>
         <p class="qr-hint">Банкны аппаараа QR уншуулж төлнө үү</p>
       </div>
