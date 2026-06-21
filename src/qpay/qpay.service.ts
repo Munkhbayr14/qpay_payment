@@ -279,7 +279,7 @@ export class QpayService {
   // ЗАСВАР: status шинэчлэхгүй — зөвхөн paid/paidAmount хадгална
   // Status-г зөвхөн registerCallback-д л PAID болгоно
 
-  // ─── 4. Төлбөр шалгах ────────────────────────────────────────────────────
+  // ─── 4. Төлбөр шалгах (ТӨГС ЗАССАН ХУВИЛБАР) ────────────────────────────────────────────
   async checkPayment(
     invoiceId: string,
     isRetry = false,
@@ -309,7 +309,63 @@ export class QpayService {
       const isPaid = data.count > 0 && data.rows.some((r) => r.payment_status === 'PAID');
       const existing = await this.paymentRepo.findOne({ invoiceId });
 
-      // Зөвхөн төлөв болон paid state хадгална — email/Shopify энд байхгүй
+      this.logger.log(`Төлбөрийн төлөв: invoice_id=${invoiceId}, paid=${isPaid}`);
+
+      // 🔥 ЭНД И-МЭЙЛ БОЛОН SHOPIFY-ИЙН ХАМГААЛАЛТЫГ ОРУУЛЖ ӨГНӨ
+      if (isPaid && existing && existing.status === 'PENDING') {
+        this.logger.log(`[Polling] Төлбөр батлагдлаа: ${invoiceId} — И-мэйл + Shopify ажиллуулж байна...`);
+
+        // 1. Статусыг давхардахаас сэргийлж шууд PAID болгох
+        existing.status = 'PAID';
+        existing.paid = true;
+        existing.paidAmount = data.paid_amount;
+        existing.paidAt = new Date();
+        await this.paymentRepo.getEntityManager().persistAndFlush(existing);
+
+        // 2. Metadata-аас и-мэйл болон бусад датаг унших
+        let meta: Record<string, any> = {};
+        try {
+          meta = existing.metadata ? JSON.parse(existing.metadata) : {};
+        } catch {
+          this.logger.warn('metadata JSON parse амжилтгүй');
+        }
+
+        let customerEmail = meta.email || '';
+        if (customerEmail) customerEmail = customerEmail.trim().toLowerCase();
+
+        // 3. И-мэйл илгээх (Түрүүлж ажиллана)
+        try {
+          await this.emailService.sendOrderConfirmation({
+            orderId: existing.orderId,
+            amount: existing.amount,
+            email: customerEmail || undefined,
+            first_name: meta.first_name || meta.firstName || '',
+            last_name: meta.last_name || meta.lastName || '',
+            address: meta.address || '',
+            city: meta.city || '',
+            phone: meta.phone || '',
+            product_details: meta.product_details || meta.productDetails || '',
+            items: Array.isArray(meta.items) ? meta.items : [],
+            invoice_id: existing.invoiceId,
+            qpay_short_url: existing.qpayShortUrl,
+            paid_amount: data.paid_amount ?? existing.paidAmount,
+          });
+          this.logger.log(`[Polling] Email амжилттай илгээлээ: ${customerEmail || 'зөвхөн admin'}`);
+        } catch (mailErr) {
+          this.logger.error('[Polling] Email илгээхэд алдаа:', mailErr);
+        }
+
+        // 4. Shopify захиалга үүсгэх
+        try {
+          await this.createShopifyOrder(existing);
+        } catch (shopErr) {
+          this.logger.error('[Polling] Shopify захиалга үүсгэхэд алдаа:', shopErr);
+        }
+
+        return { paid: isPaid, data };
+      }
+
+      // Хэрэв PAID болоогүй эсвэл аль хэдийн боловсруулагдсан бол зөвхөн DB шинэчилнэ
       await this.upsertPayment({
         orderId: existing?.orderId,
         invoiceId,
@@ -319,26 +375,18 @@ export class QpayService {
         paidAmount: data.paid_amount,
         paymentId: existing?.paymentId,
         paidAt: isPaid ? new Date() : existing?.paidAt,
-        // ⚠️ Status-г энд ӨӨРЧЛӨХГҮЙ — registerCallback л өөрчилнө
         status: existing?.status || 'PENDING',
       });
 
-      this.logger.log(`Төлбөрийн төлөв: invoice_id=${invoiceId}, paid=${isPaid}`);
       return { paid: isPaid, data };
     } catch (error) {
       const err = error as any;
-
       if (err?.response?.status === 401 && !isRetry) {
-        this.logger.warn('checkPayment 401 — token шинэчилж retry хийж байна...');
         this.accessToken = null;
         this.tokenExpiresAt = 0;
         return this.checkPayment(invoiceId, true);
       }
-
-      this.logger.error(
-        `Төлбөр шалгахад алдаа: invoice_id=${invoiceId}`,
-        err?.response?.data ?? err?.message,
-      );
+      this.logger.error(`Төлбөр шалгахад алдаа: invoice_id=${invoiceId}`, err?.response?.data ?? err?.message);
       throw new InternalServerErrorException('QPay төлбөр шалгахад алдаа гарлаа');
     }
   }
