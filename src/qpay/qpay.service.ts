@@ -311,18 +311,18 @@ export class QpayService {
 
       this.logger.log(`Төлбөрийн төлөв: invoice_id=${invoiceId}, paid=${isPaid}`);
 
-      // 🔥 ЭНД И-МЭЙЛ БОЛОН SHOPIFY-ИЙН ХАМГААЛАЛТЫГ ОРУУЛЖ ӨГНӨ
+      // 🔥 ТӨЛБӨР БАТЛАГДВАЛ И-МЭЙЛ БОЛОН SHOPIFY УРСГАЛ АЖИЛЛАНА
       if (isPaid && existing && existing.status === 'PENDING') {
         this.logger.log(`[Polling] Төлбөр батлагдлаа: ${invoiceId} — И-мэйл + Shopify ажиллуулж байна...`);
 
-        // 1. Статусыг давхардахаас сэргийлж шууд PAID болгох
+        // 1. Давхардахаас сэргийлж статусыг шууд PAID болгох
         existing.status = 'PAID';
         existing.paid = true;
         existing.paidAmount = data.paid_amount;
         existing.paidAt = new Date();
         await this.paymentRepo.getEntityManager().persistAndFlush(existing);
 
-        // 2. Metadata-аас и-мэйл болон бусад датаг унших
+        // 2. Metadata унших
         let meta: Record<string, any> = {};
         try {
           meta = existing.metadata ? JSON.parse(existing.metadata) : {};
@@ -333,7 +333,7 @@ export class QpayService {
         let customerEmail = meta.email || '';
         if (customerEmail) customerEmail = customerEmail.trim().toLowerCase();
 
-        // 3. И-мэйл илгээх (Түрүүлж ажиллана)
+        // 3. И-мэйл илгээх хэсэг (Алдааг 100% барьсан хамгаалалт)
         try {
           await this.emailService.sendOrderConfirmation({
             orderId: existing.orderId,
@@ -350,12 +350,32 @@ export class QpayService {
             qpay_short_url: existing.qpayShortUrl,
             paid_amount: data.paid_amount ?? existing.paidAmount,
           });
-          this.logger.log(`[Polling] Email амжилттай илгээлээ: ${customerEmail || 'зөвхөн admin'}`);
-        } catch (mailErr) {
-          this.logger.error('[Polling] Email илгээхэд алдаа:', mailErr);
+          this.logger.log(`[Polling] Email процесс дууслаа.`);
+        } catch (mailErr: any) {
+          this.logger.error(`[Polling] Хэрэглэгч рүү и-мэйл илгээхэд алдаа: ${mailErr?.message}`);
+
+          // 🔥 Хэрэглэгч буруу мэйл оруулсан үед админд Alert HTML шиднэ
+          try {
+            const alertHtml = `
+              <div style="font-family:sans-serif;padding:20px;border:2px solid #d32f2f;border-radius:8px">
+                <h3 style="color:#d32f2f;margin-top:0">⚠️ ХЭРЭГЛЭГЧИЙН И-МЭЙЛ ХҮРГЭГДСЭНГҮЙ</h3>
+                <p>Захиалгын ID: <strong>${existing.orderId}</strong> холбоотой хэрэглэгчийн мэйл хүргэлт уналаа.</p>
+                <p><strong>Хэрэглэгчийн оруулсан буруу хаяг:</strong> <span style="color:#d32f2f;font-weight:bold">${customerEmail || 'Байхгүй'}</span></p>
+                <p><strong>Хэрэглэгчийн утасны дугаар:</strong> <span style="color:#1976d2;font-weight:bold;font-size:16px">${meta.phone || 'Байхгүй'}</span></p>
+                <p style="background:#f5f5f5;padding:10px;border-radius:4px;font-size:12px;color:#666">Алдааны шалтгаан: ${mailErr?.message}</p>
+                <p style="margin-bottom:0;color:#555">💡 <em>Та дээрх утасны дугаар руу холбогдож мэйл хаягийг нь лавлана уу.</em></p>
+              </div>`;
+
+            await this.emailService.sendAdminAlert({
+              subject: `⚠️ Захиалгын и-мэйл хүргэгдсэнгүй: ${existing.orderId}`,
+              html: alertHtml,
+            });
+          } catch (adminErr: any) {
+            this.logger.error('Админ руу анхааруулга явуулахад алдаа гарлаа:', adminErr?.message);
+          }
         }
 
-        // 4. Shopify захиалга үүсгэх
+        // 4. Shopify захиалга үүсгэх (И-мэйл унасан ч энэ хэсэг хэвийн ажиллана)
         try {
           await this.createShopifyOrder(existing);
         } catch (shopErr) {
