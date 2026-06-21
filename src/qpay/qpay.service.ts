@@ -345,13 +345,12 @@ export class QpayService {
 
   // ─── 5. Callback — төлбөр батлагдсан үед email илгээнэ ───────────────────
 
+  // ─── 5. Callback — Төгс зассан хувилбар ───────────────────
+
   async registerCallback(body: Record<string, any>): Promise<void> {
     const invoiceId = body.invoice_id || body.payment_id;
 
-    // 1. QPay-аас төлбөрийн мэдээлэл авах
     const result = await this.checkPayment(invoiceId);
-
-    // 2. DB-аас ШИНЭЭР унших (checkPayment дараа)
     const existing = await this.paymentRepo.findOne({ invoiceId });
 
     if (!existing) {
@@ -361,32 +360,24 @@ export class QpayService {
 
     this.logger.log(`Callback: invoice=${invoiceId}, QPay paid=${result.paid}, DB status=${existing.status}`);
 
-    // 3. Төлбөр орсон + DB-д PENDING байвал л email явуулна
     if (result.paid && existing.status === 'PENDING') {
-      this.logger.log(`Төлбөр батлагдлаа: ${invoiceId} — Shopify + email боловсруулж байна...`);
+      this.logger.log(`Төлбөр батлагдлаа: ${invoiceId} — Боловсруулж байна...`);
 
-      // Shopify захиалга үүсгэх
-      try {
-        await this.createShopifyOrder(existing);
-      } catch (shopErr) {
-        this.logger.error('Shopify захиалга үүсгэхэд алдаа:', shopErr);
-      }
-
-      // Metadata задлах
+      // 1. Metadata-аас датагаа унших
       let meta: Record<string, any> = {};
       try {
         meta = existing.metadata ? JSON.parse(existing.metadata) : {};
       } catch {
-        this.logger.warn('metadata JSON parse амжилтгүй');
+        this.logger.warn('metadata JSON parse амжилтгүй боллоо');
       }
 
-      const customerEmail = meta.email || (body.email as string) || '';
-
-      if (!customerEmail) {
-        this.logger.warn(`Invoice ${invoiceId}: email олдсонгүй — зөвхөн admin руу илгээнэ`);
+      // 2. И-мэйл хаягийг маш цэвэрхэн болгож авах (Хоосон зайг устгах .trim())
+      let customerEmail = meta.email || '';
+      if (customerEmail) {
+        customerEmail = customerEmail.trim().toLowerCase();
       }
 
-      // Email илгээх
+      // 3. И-МЭЙЛИЙГ ТҮРҮҮЛЖ ИЛГЭЭХ (Shopify-оос болж гацахгүй байх хамгаалалт)
       try {
         await this.emailService.sendOrderConfirmation({
           orderId: existing.orderId,
@@ -406,11 +397,19 @@ export class QpayService {
 
         this.logger.log(`Email амжилттай илгээлээ: ${customerEmail || 'зөвхөн admin'}`);
       } catch (err) {
-        this.logger.error('Email илгээхэд алдаа:', err);
+        // Хэрэв и-мэйл илгээхэд алдаа гарвал энд барьж авна, доорх кодууд хэвийн үргэлжилнэ!
+        this.logger.error(`И-мэйл илгээх урсгалд бодит алдаа гарлаа: `);
+      }
+
+      // 4. SHOPIFY ЗАХИАЛГА ҮҮСГЭХ УРСГАЛ
+      try {
+        await this.createShopifyOrder(existing);
+      } catch (shopErr) {
+        this.logger.error(`Shopify урсгал гацсан ч и-мэйл явсан тул санаа зоволтгүй: $`);
       }
     }
 
-    // 4. Эцэст нь status-г PAID болгон хадгална
+    // 5. Эцэст нь DB статус заавал PAID болно
     const payment = await this.upsertPayment({
       orderId: existing.orderId,
       invoiceId,
@@ -424,7 +423,7 @@ export class QpayService {
       callbackReceivedAt: new Date(),
     });
 
-    await this.logRequest(payment, 'CALLBACK', body, result.data, 'QPay callback бүртгэв');
+    await this.logRequest(payment, 'CALLBACK', body, result.data, 'QPay callback бүртгв');
   }
 
   // ─── 6. Invoice цуцлах ────────────────────────────────────────────────────
