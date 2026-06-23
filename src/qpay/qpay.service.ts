@@ -313,9 +313,9 @@ export class QpayService {
 
       // 🔥 ТӨЛБӨР БАТЛАГДВАЛ И-МЭЙЛ БОЛОН SHOPIFY УРСГАЛ АЖИЛЛАНА
       if (isPaid && existing && existing.status === 'PENDING') {
-        this.logger.log(`[Polling] Төлбөр батлагдлаа: ${invoiceId} — И-мэйл + Shopify ажиллуулж байна...`);
+        this.logger.log(`[Polling] Төлбөр батлагдлаа: ${invoiceId} — Систем боловсруулж байна...`);
 
-        // 1. Давхардахаас сэргийлж статусыг шууд PAID болгох
+        // 1. Статусыг шууд PAID болгож хадгалах
         existing.status = 'PAID';
         existing.paid = true;
         existing.paidAmount = data.paid_amount;
@@ -331,51 +331,91 @@ export class QpayService {
         }
 
         let customerEmail = meta.email || '';
-        if (customerEmail) customerEmail = customerEmail.trim().toLowerCase();
+        if (customerEmail) {
+          customerEmail = customerEmail.trim().toLowerCase();
 
-        // 3. И-мэйл илгээх хэсэг (Алдааг 100% барьсан хамгаалалт)
-        try {
-          await this.emailService.sendOrderConfirmation({
-            orderId: existing.orderId,
-            amount: existing.amount,
-            email: customerEmail || undefined,
-            first_name: meta.first_name || meta.firstName || '',
-            last_name: meta.last_name || meta.lastName || '',
-            address: meta.address || '',
-            city: meta.city || '',
-            phone: meta.phone || '',
-            product_details: meta.product_details || meta.productDetails || '',
-            items: Array.isArray(meta.items) ? meta.items : [],
-            invoice_id: existing.invoiceId,
-            qpay_short_url: existing.qpayShortUrl,
-            paid_amount: data.paid_amount ?? existing.paidAmount,
-          });
-          this.logger.log(`[Polling] Email процесс дууслаа.`);
-        } catch (mailErr: any) {
-          this.logger.error(`[Polling] Хэрэглэгч рүү и-мэйл илгээхэд алдаа: ${mailErr?.message}`);
-
-          // 🔥 Хэрэглэгч буруу мэйл оруулсан үед админд Alert HTML шиднэ
-          try {
-            const alertHtml = `
-              <div style="font-family:sans-serif;padding:20px;border:2px solid #d32f2f;border-radius:8px">
-                <h3 style="color:#d32f2f;margin-top:0">⚠️ ХЭРЭГЛЭГЧИЙН И-МЭЙЛ ХҮРГЭГДСЭНГҮЙ</h3>
-                <p>Захиалгын ID: <strong>${existing.orderId}</strong> холбоотой хэрэглэгчийн мэйл хүргэлт уналаа.</p>
-                <p><strong>Хэрэглэгчийн оруулсан буруу хаяг:</strong> <span style="color:#d32f2f;font-weight:bold">${customerEmail || 'Байхгүй'}</span></p>
-                <p><strong>Хэрэглэгчийн утасны дугаар:</strong> <span style="color:#1976d2;font-weight:bold;font-size:16px">${meta.phone || 'Байхгүй'}</span></p>
-                <p style="background:#f5f5f5;padding:10px;border-radius:4px;font-size:12px;color:#666">Алдааны шалтгаан: ${mailErr?.message}</p>
-                <p style="margin-bottom:0;color:#555">💡 <em>Та дээрх утасны дугаар руу холбогдож мэйл хаягийг нь лавлана уу.</em></p>
-              </div>`;
-
-            await this.emailService.sendAdminAlert({
-              subject: `⚠️ Захиалгын и-мэйл хүргэгдсэнгүй: ${existing.orderId}`,
-              html: alertHtml,
-            });
-          } catch (adminErr: any) {
-            this.logger.error('Админ руу анхааруулга явуулахад алдаа гарлаа:', adminErr?.message);
+          // Санамсаргүй .comm гэж бичсэнийг автоматаар засах
+          if (customerEmail.endsWith('.comm')) {
+            customerEmail = customerEmail.slice(0, -1);
           }
         }
 
-        // 4. Shopify захиалга үүсгэх (И-мэйл унасан ч энэ хэсэг хэвийн ажиллана)
+        // И-мэйл форматыг шалгах Regex
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        const isValidEmail = customerEmail && emailRegex.test(customerEmail);
+
+        // 3. И-мэйл илгээх хэсэг
+        try {
+          if (isValidEmail) {
+            await this.emailService.sendOrderConfirmation({
+              orderId: existing.orderId,
+              amount: existing.amount,
+              email: customerEmail,
+              first_name: meta.first_name || meta.firstName || '',
+              last_name: meta.last_name || meta.lastName || '',
+              address: meta.address || '',
+              city: meta.city || '',
+              phone: meta.phone || '',
+              product_details: meta.product_details || meta.productDetails || '',
+              items: Array.isArray(meta.items) ? meta.items : [],
+              invoice_id: existing.invoiceId,
+              qpay_short_url: existing.qpayShortUrl,
+              paid_amount: data.paid_amount ?? existing.paidAmount,
+            });
+            this.logger.log(`[Polling] Хэрэглэгч рүү и-мэйл амжилттай илгээгдлээ.`);
+          } else {
+            throw new Error(`Хэрэглэгчийн мэйл хаяг буруу бүтэцтэй эсвэл хоосон: "${customerEmail}"`);
+          }
+
+        } catch (mailErr: any) {
+          this.logger.error(`[Polling] Мэйл илгээлт уналаа: ${mailErr?.message}`);
+
+          // 🔥 ХЭРЭГЛЭГЧИЙН БҮХ МЭДЭЭЛЛИЙГ АДМИН РУУ ОЧДОГ БОЛГОХ HTML ХЭСЭГ
+          try {
+            // Захиалсан бараануудыг жагсаалт хэлбэрээр бэлдэх
+            const itemsList = Array.isArray(meta.items)
+              ? meta.items.map((item: any) => `<li>${item.title || item.name || 'Бараа'} (x${item.quantity || 1})</li>`).join('')
+              : `<li>${meta.product_details || meta.productDetails || 'Барааны мэдээлэл байхгүй'}</li>`;
+
+            const alertHtml = `
+              <div style="font-family:sans-serif;padding:24px;border:2px solid #d32f2f;border-radius:8px;max-width:600px;color:#333;">
+                <h3 style="color:#d32f2f;margin-top:0;font-size:18px">⚠️ ХЭРЭГЛЭГЧИЙН И-МЭЙЛ ХҮРГЭГДСЕНГҮЙ! (ТӨЛБӨР ТӨЛӨГДӨН)</h3>
+                <p>Захиалгын ID <strong>${existing.orderId}</strong>-ийн QPay төлбөр амжилттай орсон боловч хэрэглэгчийн мэйл хаяг алдаатай тул систем мэйл илгээж чадсангүй.</p>
+                
+                <hr style="border:0;border-top:1px solid #eee;margin:16px 0"/>
+                
+                <h4 style="color:#1976d2;margin-bottom:8px">👤 ХЭРЭГЛЭГЧИЙН МЭДЭЭЛЭЛ:</h4>
+                <table style="width:100%;border-collapse:collapse;font-size:14px">
+                  <tr><td style="padding:4px 0;color:#666" width="140">Нэр:</td><td><strong>${meta.last_name || ''} ${meta.first_name || 'Байхгүй'}</strong></td></tr>
+                  <tr><td style="padding:4px 0;color:#666">📞 Утасны дугаар:</td><td><a href="tel:${meta.phone || ''}" style="color:#1976d2;font-weight:bold;font-size:16px">${meta.phone || 'Байхгүй'}</a></td></tr>
+                  <tr><td style="padding:4px 0;color:#666">Буруу оруулсан мэйл:</td><td style="color:#d32f2f;font-weight:bold">${customerEmail || 'Хоосон / Байхгүй'}</td></tr>
+                  <tr><td style="padding:4px 0;color:#666">📍 Хүргэлтийн хаяг:</td><td>${meta.address || 'Байхгүй'}, ${meta.city || ''}</td></tr>
+                  <tr><td style="padding:4px 0;color:#666">💵 Төлсөн дүн:</td><td><strong>${Number(data.paid_amount || existing.amount).toLocaleString()} ₮</strong></td></tr>
+                </table>
+
+                <hr style="border:0;border-top:1px solid #eee;margin:16px 0"/>
+
+                <h4 style="color:#1976d2;margin-bottom:8px">📦 ЗАХИАЛСАН БАРАА:</h4>
+                <ul style="padding-left:20px;margin-top:0;font-size:14px">
+                  ${itemsList}
+                </ul>
+
+                <div style="background:#fff3e0;padding:12px;border-radius:4px;font-size:13px;color:#e65100;margin-top:16px;border-left:4px solid #ffb74d">
+                  💡 <strong>Админд зөвлөмж:</strong> Shopify дээр захиалга хэвийн үүссэн байгаа. Хэрэглэгч рүү дээрх утасны дугаараар яаралтай холбогдож, зөв мэйл хаягийг нь авах эсвэл захиалгыг нь гараараа баталгаажуулна уу.
+                </div>
+              </div>`;
+
+            await this.emailService.sendAdminAlert({
+              subject: `⚠️ [Яаралтай] Захиалгын и-мэйл уналаа: ${existing.orderId} (Утас: ${meta.phone || 'Байхгүй'})`,
+              html: alertHtml,
+            });
+            this.logger.log(`[Polling] Админ руу хэрэглэгчийн бүтэн мэдээлэлтэй Alert амжилттай шидлээ.`);
+          } catch (adminErr: any) {
+            this.logger.error('Админ руу alert явуулахад алдаа гарлаа:', adminErr?.message);
+          }
+        }
+
+        // 4. Shopify захиалга үүсгэх (Мэйл унасан ч энэ хэвийн ажиллана 🚀)
         try {
           await this.createShopifyOrder(existing);
         } catch (shopErr) {

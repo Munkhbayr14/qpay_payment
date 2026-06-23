@@ -160,6 +160,6 @@ export class EmailService {
     }
 
     // Бүрэн хамгаалалт: Хэрэглэгчийн мэйл буруу байсан ч Админы мэйлийг гацаахгүй ажиллуулна
-    await Promise.all(tasks.map(p => p.catch(e => e)));
+    await Promise.all(tasks);
   }
 }
