@@ -31,7 +31,7 @@ export class QpayController {
   private readonly SECRET_SALT = 'DriftUB_Secure_Salt_2026_Key!';
 
   private getSecureBaseUrl(): string {
-    const url = this.baseUrl || 'https://pay.driftub.store';
+    const url = this.baseUrl || 'https://pay.driftub.com';
     return url.startsWith('http://') ? url.replace('http://', 'https://') : url;
   }
 
@@ -273,7 +273,7 @@ export class QpayController {
         Захиалга баталгаажлаа.<br>
        Захиалгын мэдээлэл <b>${email}</b> хаяг руу илгээгдлээ.
       </div>
-      <a href="https://www.driftub.store/" class="success-btn">Дэлгүүр рүү буцах</a>
+      <a href="https://www.driftub.com/" class="success-btn">Дэлгүүр рүү буцах</a>
     </div>
 
     <div class="card-header">

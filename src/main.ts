@@ -7,8 +7,8 @@ async function bootstrap() {
 
   app.enableCors({
     origin: [
-      'https://www.driftub.store',
-      'https://driftub.store',
+      'https://www.driftub.com',
+      'https://driftub.com',
     ],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,

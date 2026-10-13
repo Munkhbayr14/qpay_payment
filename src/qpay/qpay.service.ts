@@ -152,7 +152,7 @@ export class QpayService {
   // ─── 2. Checkout боловсруулах ─────────────────────────────────────────────
 
   async processCheckout(checkoutDto: any) {
-    const callbackUrl = checkoutDto.callbackUrl || 'https://pay.driftub.store/qpay/callback';
+    const callbackUrl = checkoutDto.callbackUrl || 'https://pay.driftub.com/qpay/callback';
 
     const customerMeta = {
       email: checkoutDto.email || '',
